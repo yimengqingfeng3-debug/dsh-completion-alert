@@ -1,0 +1,11 @@
+# Nothing here is needed to run the plugin: the package is plain source plus one
+# embedded asset. These entries only keep local tooling out of the repository.
+node_modules/
+dist/
+*.tgz
+npm-debug.log*
+.DS_Store
+Thumbs.db
+*.local
+.cost-balance-backup/
+.completion-alert-backup/

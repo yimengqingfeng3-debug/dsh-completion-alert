@@ -1,0 +1,13 @@
+# dsh-completion-alert bundle patch.
+#
+# Mounts the completion alert row into a dsh profile composition. Either list
+# this package under the profile's `dsh.profile.bundles`, or let install.ps1
+# append this insert to the profile's own cordis.patch.yml (which recomposes
+# live on profiles with `patchReload: live`).
+#
+# The row needs no host service: the browser half carries the alert tone as an
+# embedded payload and reads everything it needs from the client services it
+# already finds (sessions / uiSession / uiWorkspace / settingsScope).
+- insert:
+    - id: completion-alert
+      name: 'dsh-completion-alert'

@@ -1,0 +1,9 @@
+# The npm tarball ships the installed plugin surface only: the two runtime
+# modules, the bundle patch, the asset the embed tool reads, the docs, and the
+# installer. Tests, the packaging workflow and tooling stay in the repository.
+test/
+.github/
+.gitignore
+.pnpm-lock.yaml
+package-lock.json
+*.tgz

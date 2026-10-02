@@ -1,0 +1,26 @@
+name: test
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      # @deepseek-ai/schemastery is a peer dependency; installing it here is what
+      # lets the host-half tests validate against the real schema engine.
+      - run: npm install --no-audit --no-fund
+      - run: npm test
+      # Fails when lib/client.js and assets/bingbingbing.ogg have drifted apart.
+      # tools/embed-audio.ps1 is PowerShell, so on Linux the comparison runs in
+      # node: see tools/check-embedded-tone.mjs.
+      - run: node tools/check-embedded-tone.mjs

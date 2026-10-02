@@ -1,0 +1,89 @@
+{
+  "name": "dsh-completion-alert",
+  "version": "1.0.0",
+  "description": "DSH 工作完成提示：一轮工作结束播放「冰冰冰」提示音，并在右下角弹出可点击跳转的通知条；声音、音量、提示范围与自定义音源都在设置页里",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "assets",
+    "tools",
+    "cordis.patch.yml",
+    "install.ps1",
+    "README.md",
+    "README.zh-CN.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "deepseek",
+    "completion",
+    "turn-end",
+    "notification",
+    "toast",
+    "sound",
+    "alert"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yimengqingfeng3-debug/dsh-completion-alert.git"
+  },
+  "homepage": "https://github.com/yimengqingfeng3-debug/dsh-completion-alert#readme",
+  "bugs": {
+    "url": "https://github.com/yimengqingfeng3-debug/dsh-completion-alert/issues"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "test": "node --import ./test/loader.mjs --test test/host.test.mjs test/client.test.mjs",
+    "pack": "npm pack --pack-destination dist",
+    "embed-audio": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/embed-audio.ps1"
+  },
+  "dsh": {
+    "pluginType": "client",
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "compatibility": {
+      "dsh": ">=0.1.0-rc.7",
+      "profiles": [
+        "web",
+        "desktop"
+      ]
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-primitives",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ],
+      "platform": "web"
+    }
+  },
+  "dshClient": {
+    "inject": [
+      "@deepseek-ai/dsh-client-locale",
+      "@deepseek-ai/dsh-client-ui-primitives",
+      "@deepseek-ai/dsh-client-ui-settings"
+    ],
+    "platform": "web"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/schemastery": "^3.18.1",
+    "react": "^18.2.0"
+  },
+  "devDependencies": {
+    "@deepseek-ai/schemastery": "^3.18.4"
+  }
+}

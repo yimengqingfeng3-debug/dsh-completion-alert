@@ -1,0 +1,34 @@
+NOTICE
+======
+
+dsh-completion-alert
+MIT License, Copyright (c) 2026 yimengqingfeng3-debug
+
+The plugin's code in this repository is original work released under the MIT
+License (see LICENSE).
+
+Bundled audio asset
+-------------------
+
+assets/bingbingbing.ogg — and the same payload embedded in lib/client.js — is a
+short clip that was cut, levelled and trimmed (one 1.06 s round, 48 kHz mono Ogg
+Vorbis, 12 642 bytes) by this project from a sound effect that circulates as a
+public internet meme (the looping "bing bing bing" tone). The clip is **not**
+original work of this project's author, and no license is granted for it here.
+
+  * It is included so the plugin works out of the box on the author's machine
+    and for other users who want the same familiar tone.
+  * If you are the rights holder and want it removed, open an issue and it will
+    be replaced with a silent placeholder in the next release.
+  * If you redistribute this package, or use it commercially, replace the asset
+    with one you have the rights to:
+
+      powershell -NoProfile -ExecutionPolicy Bypass -File tools\embed-audio.ps1 -Source C:\path\to\your-tone.ogg
+
+    The plugin then carries your tone and none of the above applies. The settings
+    page also lets any end user upload their own tone at runtime, which is the
+    recommended path when distribution rights are unclear.
+
+Everything else in `lib/` (the completion detector, the audio player, the
+notice layer, the settings page, the host-half schema and diagnostics route) was
+written for this package.
