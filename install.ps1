@@ -25,11 +25,23 @@
 param(
   [string]$Profile = 'desktop',
   [string]$DshHome = $(if ($env:DSH_HOME) { $env:DSH_HOME } else { Join-Path $HOME '.dsh' }),
-  [switch]$Uninstall
+  [switch]$Uninstall,
+  # Mount the row without copying this checkout into the profile. Use it after
+  # installing the package from the registry, so the profile runs the published
+  # artifact rather than the working tree:
+  #
+  #   npm install --prefix <profile> --no-save dsh-completion-alert
+  #   powershell -File install.ps1 -NoCopy
+  [switch]$NoCopy,
+  # Explicit package directory to mount instead of '<profile>/node_modules/dsh-completion-alert'.
+  [string]$PackageDir
 )
 
 $ErrorActionPreference = 'Stop'
 $source = $PSScriptRoot
+# UTF-8 without a BOM: the profile's YAML and JSON are read and written with it
+# explicitly, because PowerShell 5.1's own defaults use the ANSI code page.
+$utf8 = New-Object System.Text.UTF8Encoding($false)
 $profileDir = Join-Path (Join-Path $DshHome 'profiles') $Profile
 $packageJsonPath = Join-Path $profileDir 'package.json'
 $patchPath = Join-Path $profileDir 'cordis.patch.yml'
@@ -161,22 +173,37 @@ if ($Uninstall) {
 
 # ---------------------------------------------------------------- install ----
 
-# 1. Copy the package into the profile's node_modules. A plain directory is
-#    enough: the loader resolves the row name relative to the profile. The lib
-#    directory is replaced wholesale so a stale file can never survive an update.
-if (-not (Test-Path $installDir)) { New-Item -ItemType Directory -Path $installDir | Out-Null }
-foreach ($item in @('package.json', 'cordis.patch.yml', 'README.md')) {
-  if (Test-Path (Join-Path $source $item)) { Copy-Item (Join-Path $source $item) $installDir -Force }
+# 1. Put the package into the profile's node_modules: copy this checkout, or
+#    leave whatever is already there alone (the registry-installed artifact).
+#    The copy replaces lib/ and tools/ wholesale, so a stale file can never
+#    survive an update.
+if ($NoCopy) {
+  if (-not (Test-Path $installDir)) {
+    throw "no package at $installDir; install it first (npm install --prefix `"$profileDir`" --no-save $packageName) or drop -NoCopy"
+  }
+  if ($PackageDir) { throw '-NoCopy and -PackageDir are mutually exclusive' }
+  Write-Host "keeping the existing package -> $installDir (registry artifact, not copied)"
+} else {
+  if ($PackageDir) {
+    if (-not (Test-Path (Join-Path $PackageDir 'lib\client.js'))) { throw "no client bundle under $PackageDir" }
+    $installDir = $PackageDir
+    Write-Host "mounting the package in place -> $installDir"
+  } else {
+    if (-not (Test-Path $installDir)) { New-Item -ItemType Directory -Path $installDir | Out-Null }
+    foreach ($item in @('package.json', 'cordis.patch.yml', 'README.md')) {
+      if (Test-Path (Join-Path $source $item)) { Copy-Item (Join-Path $source $item) $installDir -Force }
+    }
+    $installedLib = Join-Path $installDir 'lib'
+    if (Test-Path $installedLib) { Remove-Item -Recurse -Force $installedLib }
+    Copy-Item (Join-Path $source 'lib') $installDir -Recurse -Force
+    $installedTools = Join-Path $installDir 'tools'
+    if (Test-Path (Join-Path $source 'tools')) {
+      if (Test-Path $installedTools) { Remove-Item -Recurse -Force $installedTools }
+      Copy-Item (Join-Path $source 'tools') $installDir -Recurse -Force
+    }
+    Write-Host "installed package -> $installDir"
+  }
 }
-$installedLib = Join-Path $installDir 'lib'
-if (Test-Path $installedLib) { Remove-Item -Recurse -Force $installedLib }
-Copy-Item (Join-Path $source 'lib') $installDir -Recurse -Force
-$installedTools = Join-Path $installDir 'tools'
-if (Test-Path (Join-Path $source 'tools')) {
-  if (Test-Path $installedTools) { Remove-Item -Recurse -Force $installedTools }
-  Copy-Item (Join-Path $source 'tools') $installDir -Recurse -Force
-}
-Write-Host "installed package -> $installDir"
 
 # 2. Mount the row.
 Backup-Once $patchPath
@@ -210,6 +237,43 @@ if ($manifestText -notmatch '"patchReload"\s*:\s*"live"') {
   $json = $manifest | ConvertTo-Json -Depth 12
   [System.IO.File]::WriteAllText($packageJsonPath, $json + [Environment]::NewLine, (New-Object System.Text.UTF8Encoding($false)))
   Write-Host 'enabled dsh.profile.patchReload = live (later edits recompose without a restart)'
+}
+
+# 4. Keep the profile's pnpm supply-chain policy out of the way of the NEXT
+#    install. pnpm 11+ refuses a freshly published package (default window: 24 h)
+#    unless the exact version is exempted, and it normally offers to add that
+#    exemption itself — which it cannot do when DSH drives the install with a
+#    closed stdin, so `dsh plugin install` fails with
+#    ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION instead. One line per installed
+#    version is all pnpm needs; the profile already carries such lines for its
+#    other plugins.
+$workspacePath = Join-Path $profileDir 'pnpm-workspace.yaml'
+if (Test-Path $workspacePath) {
+  $installedManifest = Join-Path $installDir 'package.json'
+  $installedVersion = $null
+  if (Test-Path $installedManifest) {
+    try {
+      $installedVersion = (([System.IO.File]::ReadAllText($installedManifest, $utf8)) | ConvertFrom-Json).version
+    } catch {
+      $installedVersion = $null
+    }
+  }
+  if ($installedVersion) {
+    $exemption = "$packageName@$installedVersion"
+    $workspaceText = [System.IO.File]::ReadAllText($workspacePath, $utf8)
+    if ($workspaceText -match "(?m)^\s*-\s*$([regex]::Escape($exemption))\s*$") {
+      Write-Host "pnpm release-age exemption already present: $exemption"
+    } else {
+      Backup-Once $workspacePath
+      if ($workspaceText -match '(?m)^minimumReleaseAgeExclude:') {
+        $updated = $workspaceText.TrimEnd() + "`n  - $exemption`n"
+      } else {
+        $updated = $workspaceText.TrimEnd() + "`nminimumReleaseAgeExclude:`n  - $exemption`n"
+      }
+      [System.IO.File]::WriteAllText($workspacePath, $updated, $utf8)
+      Write-Host "added pnpm release-age exemption: $exemption"
+    }
+  }
 }
 
 Write-Host ''
