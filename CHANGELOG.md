@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.6.0
+
+**Six requests, one bug.**
+
+* The custom tone can be **named** while trimming it, and **renamed** afterwards
+  from the library's custom row.
+* **Repeat count**: one alert can play its tone 1 to 4 times. The repeats are
+  separate source nodes on a timer, so a repeat replays the *slice* the user
+  chose, and Stop cancels the ones still pending. The stop-guard scales with the
+  count, or it would cut a repeated tone short.
+* Every dialog now has a **closing animation** to match its opening one.
+* The trim dialog's **waveform is drawn at device resolution** on a backing store
+  sized by `devicePixelRatio`, instead of a 520x120 bitmap stretched by CSS -
+  that stretch was the blur.
+* Picking a file from the library **opens the trim dialog on top of it** rather
+  than replacing it, so closing the trim returns to the library, in place, with
+  the custom row right where it was.
+* The two placeholder tones from 1.2/1.3 are **gone**: `hiss` and `yikes` were
+  synthesized stand-ins, and the tones that replaced them are the user's own.
+
+Fixed: **a hand-stopped round no longer announces.** The rule is now that only an
+outcome the Host positively reports as a completion is announced - `completed`,
+`blocked` or `max-tokens`. An `aborted` round and an *unknown* outcome both stay
+quiet. Treating "unknown" as "finished" was the bug: a stop can hide in an
+unavailable answer. The "Announce stopped rounds too" row is removed with it.
+
 ## 1.5.1
 
 **Uninstalling through the plugin manager now works.** The manager's uninstall

@@ -839,6 +839,7 @@ test("the plugin mounts the notice layer and one settings page", async () => {
 test("a finished round queues a notice titled by its session", async () => {
   const world = await bootRuntime();
   try {
+    world.browser.setOutcome("completed");
     world.sessions.set({
       phase: "ready",
       ids: ["s1"],
@@ -878,6 +879,7 @@ test("the notice opens its session through uiWorkspace", async () => {
 test("scope=background keeps the session on screen quiet but reports the others", async () => {
   const world = await bootRuntime();
   try {
+    world.browser.setOutcome("completed");
     world.sessions.set({
       phase: "ready",
       ids: ["viewed", "other"],
@@ -1041,26 +1043,18 @@ test("a hand-stopped round raises no notice, and the switch can allow it", async
     await settle();
     assert.equal(world.props.store.getSnapshot().length, 0, "a stopped round must stay quiet");
 
-    // Turning the option on announces it anyway, as a deliberate choice.
-    world.sectionProps.runtime.update({ alertOnStop: true });
-    setRunning(world.status, "s1", true);
-    setRunning(world.status, "s1", false);
-    await settle();
-    assert.equal(world.props.store.getSnapshot().length, 1, "with the switch on it is announced");
-
-    // A normal completion is announced with the switch off as well.
-    world.sectionProps.runtime.update({ alertOnStop: false });
+    // A normal completion is announced.
     world.browser.setOutcome("completed");
     setRunning(world.status, "s1", true);
     setRunning(world.status, "s1", false);
     await settle();
-    assert.equal(world.props.store.getSnapshot().length, 2, "a completed round is still announced");
+    assert.equal(world.props.store.getSnapshot().length, 1, "a completed round is announced");
   } finally {
     world.browser.teardown();
   }
 });
 
-test("a host that cannot answer still announces completions", async () => {
+test("a host that cannot answer stays quiet rather than firing a stray tone", async () => {
   const world = await bootRuntime();
   try {
     world.sessions.set({
@@ -1073,7 +1067,9 @@ test("a host that cannot answer still announces completions", async () => {
     setRunning(world.status, "s1", true);
     setRunning(world.status, "s1", false);
     await settle();
-    assert.equal(world.props.store.getSnapshot().length, 1, "an unknown outcome must not swallow the notice");
+    // Announcing an unknown outcome is how a hand-stopped round used to get its
+    // tone back, so an unavailable answer means silence, not a guess.
+    assert.equal(world.props.store.getSnapshot().length, 0, "an unknown outcome announces nothing");
   } finally {
     world.browser.teardown();
   }
@@ -1146,6 +1142,67 @@ test("background state falls back to focus, and defaults to the foreground", asy
   } finally {
     globalThis.document.visibilityState = "visible";
     world.browser.teardown();
+  }
+});
+
+test("the repeat setting plays the tone that many times", async () => {
+  const { module, browser, context } = await boot();
+  const audio = installFakeAudio(context, { startRunning: true });
+  try {
+    const alert = module.createAlert({ report: () => {} });
+    alert.configure({ ...module.DEFAULT_SETTINGS, repeat: 3, toneId: "crisp-a" });
+    alert.previewTone("crisp-a", null);
+    await alert.settled();
+    // The first playback is synchronous with the decode; the repeats follow on a
+    // timer, so the assertions wait for them.
+    assert.equal(audio.log.starts.length, 1, "the first play starts immediately");
+    // 0.5 s of audio plus the 180 ms gap, so the third play lands around 1.4 s.
+    await new Promise((resolve) => setTimeout(resolve, 1800));
+    assert.equal(audio.log.starts.length, 3, "two repeats follow");
+    assert.equal(alert.state().failure, "");
+  } finally {
+    audio.restore();
+    browser.teardown();
+  }
+});
+
+test("stop cancels the repeats that have not played yet", async () => {
+  const { module, browser, context } = await boot();
+  const audio = installFakeAudio(context, { startRunning: true });
+  try {
+    const alert = module.createAlert({ report: () => {} });
+    alert.configure({ ...module.DEFAULT_SETTINGS, repeat: 4, toneId: "crisp-a" });
+    alert.previewTone("crisp-a", null);
+    await alert.settled();
+    assert.equal(audio.log.starts.length, 1);
+    alert.stop();
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    assert.equal(audio.log.starts.length, 1, "no repeat played after stop");
+  } finally {
+    audio.restore();
+    browser.teardown();
+  }
+});
+
+test("the repeat count is clamped to the offered range", async () => {
+  const { module, browser, context } = await boot();
+  const audio = installFakeAudio(context, { startRunning: true });
+  try {
+    const alert = module.createAlert({ report: () => {} });
+    for (const value of [0, 99, -3]) {
+      alert.configure({ ...module.DEFAULT_SETTINGS, repeat: value, toneId: "crisp-a" });
+      assert.ok(alert.state().volume !== undefined, "the player still reads a snapshot");
+      assert.equal(module.sanitizeSettings({ ...module.DEFAULT_SETTINGS, repeat: value }).repeat >= 1, true, `repeat ${value} is clamped up`);
+      assert.equal(module.sanitizeSettings({ ...module.DEFAULT_SETTINGS, repeat: value }).repeat <= 4, true, `repeat ${value} is clamped down`);
+    }
+    alert.configure({ ...module.DEFAULT_SETTINGS, repeat: 99, toneId: "crisp-a" });
+    alert.previewTone("crisp-a", null);
+    await alert.settled();
+    await new Promise((resolve) => setTimeout(resolve, 2600));
+    assert.ok(audio.log.starts.length <= 4, `at most four plays, saw ${audio.log.starts.length}`);
+  } finally {
+    audio.restore();
+    browser.teardown();
   }
 });
 

@@ -144,12 +144,15 @@ GET http://127.0.0.1:<port>/api/completion-alert.diag
 | Completion alert | Master switch. Off means no tone and no notice |
 | When to alert | `All sessions`: every session that finishes; `Background only`: stay quiet for the session you are looking at |
 | Everything while backgrounded | With `Background only` selected: once the app is hidden or minimised, nothing is really "on screen", so any session finishing alerts you. The row shows the current state and is disabled while `All sessions` is selected |
-| Announce stopped rounds too | Off by default: a round you ended with **Stop** raises no notice and no tone. Only rounds that finish on their own are announced |
 | Play the tone | Mutes the sound only; the notice still appears |
 | Volume | 0–100 %, applies to previews and alerts alike |
 | Tone | `‹ current ›` steps through the tones and previews each step; the downward arrow opens the full library. Clicking the name replays it |
 | All tones | Every built-in tone with a preview button per row, then a **Custom tone** row that picks a local file |
-| Custom tone | Choose an mp3 / wav / ogg, then trim it on its waveform. **Preview slice** auditions exactly the range you selected, before anything is saved |
+| Repeat | How many times the tone plays per alert, 1 to 4. A repeat replays the slice you trimmed, and Stop cancels the ones still pending |
+| Custom tone | Choose an mp3 / wav / ogg, then trim it on its waveform and name it. **Preview slice** auditions exactly the range you selected, before anything is saved; the library's custom row also carries a rename button |
+
+A round stopped by hand is never announced. Only an outcome the Host reports as a
+completion (`completed`, `blocked`, `max-tokens`) raises a notice and a tone.
 
 Preferences live in this plugin's own settings namespace (`completion-alert`) inside the profile's settings document, so they survive a restart and reach every open window. Writes go through `ctx.configForms.get("completion-alert")`, the same transport the shipped settings pages use.
 
@@ -211,8 +214,6 @@ Three tones ship with the plugin. Two of them are **original additive synthesis*
 | 冰冰冰 (`bingbingbing`) | `assets/bingbingbing.ogg` | the meme tone, cut to one 1.06 s round, 12 642 bytes |
 | Crisp (`crisp-a`) | `assets/crisp-a.ogg`, synthesized | two ascending notes (F#6 -> F#7), the payment-confirmation shape, 0.50 s, 6 477 bytes |
 | Crisp short (`crisp-b`) | `assets/crisp-b.ogg`, synthesized | three ascending marimba notes (D4 -> A4 -> D5), the message-alert shape, 0.58 s, 7 068 bytes |
-| Hiss (`hiss`) | `assets/hiss.ogg`, synthesized | one short breathy hiss: band-passed noise with no pitch, a hard onset and a fast release, 0.70 s, 11 053 bytes |
-| Yikes (`yikes`) | `assets/yikes.ogg`, synthesized | a two-note descending whistle (A#4 -> D#4) with a breathy onset: surprise, 0.46 s, 8 457 bytes |
 
 ### A tone for this machine only
 
