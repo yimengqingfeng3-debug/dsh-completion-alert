@@ -9,3 +9,7 @@ Thumbs.db
 *.local
 .cost-balance-backup/
 .completion-alert-backup/
+
+# Local-only tones: a recording this machine carries but the package does not.
+tools/tones.local.json
+assets/*.local.ogg

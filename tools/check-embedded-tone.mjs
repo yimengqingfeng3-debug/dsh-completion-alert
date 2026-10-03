@@ -21,6 +21,9 @@ import { dirname, join } from "node:path";
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "..");
 
+// The shipped registry only: a tone added locally through
+// tools/use-local-tone.ps1 lives in tools/tones.local.json, which is gitignored
+// and is not this check's business - it is not part of what gets published.
 const registry = JSON.parse(readFileSync(join(root, "tools", "tones.json"), "utf8"));
 const tones = registry.tones ?? [];
 if (tones.length === 0) {

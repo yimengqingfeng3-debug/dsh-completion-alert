@@ -190,9 +190,27 @@ Three tones ship with the plugin. Two of them are **original additive synthesis*
 | Hiss (`hiss`) | `assets/hiss.ogg`, synthesized | one short breathy hiss: band-passed noise with no pitch, a hard onset and a fast release, 0.70 s, 11 053 bytes |
 | Yikes (`yikes`) | `assets/yikes.ogg`, synthesized | a two-note descending whistle (A#4 -> D#4) with a breathy onset: surprise, 0.46 s, 8 457 bytes |
 
-### Adding a tone
+### A tone for this machine only
 
-`tools/tones.json` is the only place a tone is declared:
+A recording you have no right to redistribute still belongs in your own alert
+list. `tools/use-local-tone.ps1` does exactly that:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\use-local-tone.ps1 `
+  -Id haqi -Label "哈气" -Hint "猫哈气" -Source C:\clips\haqi.wav -Recording `
+  -Trim 2.30 2.72
+```
+
+It converts the file to Ogg, registers it in `tools/tones.local.json`, and bakes
+it into the bundle, which `tools/embed-tones.ps1` merges on top of the shipped
+registry. The tone then behaves like a built-in one. What it does **not** do is
+leave this machine: `tools/tones.local.json` and `assets/*.local.ogg` are
+gitignored, and `npm run prepublishOnly` refuses to publish a bundle that carries
+one — this checkout is mounted in place, so its bundle does carry them.
+
+### Adding a tone to the package
+
+`tools/tones.json` is the only place a shipped tone is declared:
 
 1. put an Ogg in `assets/`;
 2. add a row to `tools/tones.json` - `id`, `label`, `hint`, `source`, and `kind` (`synth` for

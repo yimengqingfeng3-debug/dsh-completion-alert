@@ -20,20 +20,6 @@
       "hint": "三音上行马林巴「咚·哒·铃」，短信提示那种",
       "source": "crisp-b.ogg",
       "kind": "synth"
-    },
-    {
-      "id": "hiss",
-      "label": "哈气",
-      "hint": "短促的一声「嘶——」，带气声的警觉感",
-      "source": "hiss.ogg",
-      "kind": "synth"
-    },
-    {
-      "id": "yikes",
-      "label": "哎呀我去",
-      "hint": "两音下行短哨「哟↘」，惊讶那一下",
-      "source": "yikes.ogg",
-      "kind": "synth"
     }
   ]
 }

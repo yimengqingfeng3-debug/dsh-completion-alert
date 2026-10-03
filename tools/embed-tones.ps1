@@ -32,6 +32,10 @@
 param(
   [string]$AssetsDir,
   [string]$RegistryPath,
+  # A second registry merged on top, for tones that must stay out of the published
+  # package: a recording the user supplied, a clip that only exists on this
+  # machine. Point it at tools/tones.local.json. Gitignored, so it never ships.
+  [string]$ExtraRegistryPath,
   [string]$ClientPath,
   [switch]$Check
 )
@@ -48,8 +52,20 @@ if (-not (Test-Path $RegistryPath)) { throw "tone registry not found: $RegistryP
 $registry = [System.IO.File]::ReadAllText($RegistryPath, $utf8) | ConvertFrom-Json
 if (-not $registry.tones -or $registry.tones.Count -eq 0) { throw "the registry lists no tones: $RegistryPath" }
 
+# The local registry is merged in after the shipped one, so a local tone can
+# also override a shipped row by reusing its id.
+$allTones = @($registry.tones)
+$extraPath = if ($ExtraRegistryPath) { $ExtraRegistryPath } else { Join-Path $root 'tools\tones.local.json' }
+if (Test-Path $extraPath) {
+  $extra = [System.IO.File]::ReadAllText($extraPath, $utf8) | ConvertFrom-Json
+  if ($extra.tones) {
+    $allTones += @($extra.tones)
+    Write-Host "local registry: +$(($extra.tones | Measure-Object).Count) tone(s) from $(Split-Path $extraPath -Leaf)"
+  }
+}
+
 $entries = @()
-foreach ($tone in $registry.tones) {
+foreach ($tone in $allTones) {
   foreach ($field in 'id', 'label', 'hint', 'source') {
     if (-not $tone.$field) { throw "a registry row is missing '$field': $($tone | ConvertTo-Json -Compress)" }
   }

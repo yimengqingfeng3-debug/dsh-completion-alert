@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.5.0
+
+**The arrows no longer snap back to 冰冰冰.** Picking a tone (or a scope) could be
+undone a moment later by the stored document: a refused or in-flight write makes
+the settings form re-read the Host document, and that older document was applied
+over the choice the user had just made. Fields the user has changed are now
+protected until the stored document agrees with them, and a refused write is
+retried once per value instead of being dropped.
+
+Two faults found while fixing it, both worth recording:
+
+* the retry was unbounded. Clearing its in-flight marker on every attempt turned
+  it into a loop that also kept the page's timers alive, so the test runner never
+  exited. It is now one retry per value, and the suite finishes in seconds again.
+* the tone payloads for locally added tones were being written as `<id>.ogg`,
+  which is a name git tracks. Local tones now use `<id>.local.ogg`, the suffix
+  `.gitignore` already covered.
+
+**Local-only tones.** `tools/use-local-tone.ps1` turns an audio file on this
+machine into a tone that behaves like a built-in one - its own label in the
+settings list, its own row, reachable with the arrows - while
+`tools/tones.local.json` and `assets/*.local.ogg` stay out of git and out of the
+package. `npm run prepublishOnly` (and CI) now refuse to publish a bundle that
+carries one, because this checkout is mounted in place and its bundle does.
+
 ## 1.4.0
 
 **Preferences now actually persist.** Everything before this release kept its

@@ -343,11 +343,20 @@ function makeContext({ withSettingsForm = true, legacyOnly = false } = {}) {
     formSnapshot = { ...formSnapshot, ...patch };
     formStore.set(formSnapshot);
   };
+  /** Fields the Host refuses; a refusal triggers the form's recovery read. */
+  const refusedFields = new Set();
   const scope = {
     getSnapshot: () => formSnapshot,
     subscribe: formStore.subscribe,
     set: (field, value) => {
       settingsWrites.push({ field, value });
+      if (refusedFields.has(field)) {
+        // The real form re-reads the Host document after a refusal, which is
+        // exactly when a page that trusts the document over its own choice
+        // snaps back to the old value.
+        publish({ revision: formSnapshot.revision + 1 });
+        return Promise.resolve(false);
+      }
       publish({
         status: "ready",
         value: { ...(formSnapshot.value ?? {}), [field]: value },
@@ -426,7 +435,10 @@ function makeContext({ withSettingsForm = true, legacyOnly = false } = {}) {
       return property in target || property in services;
     }
   });
-  return { ctx, status, sessions, slots, settingsWrites, seedSettings, services, warnings, effects, scope };
+  return {
+    ctx, status, sessions, slots, settingsWrites, seedSettings, services, warnings, effects, scope,
+    refuseField: (field) => refusedFields.add(field)
+  };
 }
 
 /** Drive one session's running state, then let the watcher observe it. */
@@ -471,7 +483,13 @@ test("every built-in tone is inline, and the audio decoder can reach it", async 
     for (const tone of module.TONE_LIBRARY) {
       // The library entry and the generated payload map must agree...
       assert.ok(block[1].includes(`'${tone.id}':`), `${tone.id} must have a payload entry`);
-      assert.equal(tone.source, `${tone.id}.ogg`, `${tone.id} must name the asset it came from`);
+      // A shipped tone names `<id>.ogg`; a tone added locally through
+      // tools/use-local-tone.ps1 names `<id>.local.ogg`, the suffix that keeps it
+      // out of git and out of the published package.
+      const expectedSource = tone.kind === "recording" && tone.source.endsWith(".local.ogg")
+        ? `${tone.id}.local.ogg`
+        : `${tone.id}.ogg`;
+      assert.equal(tone.source, expectedSource, `${tone.id} must name the asset it came from`);
       // ...and the payload itself must be present verbatim.
       const chunks = assetChunks(join("assets", tone.source));
       assert.ok(chunks.length > 1, `${tone.id} must be a real payload, not a stub`);
@@ -891,6 +909,51 @@ test("disabling the feature stops both the notice and the tone", async () => {
     setRunning(world.status, "s1", true);
     setRunning(world.status, "s1", false);
     assert.equal(world.props.store.getSnapshot().length, 0);
+  } finally {
+    world.browser.teardown();
+  }
+});
+
+test("a refused write does not snap the page back to the stored tone", async () => {
+  const world = await bootRuntime();
+  try {
+    // The Host accepts the document, then refuses the tone field specifically -
+    // the case that produced "the arrows always jump back to 冰冰冰".
+    world.seedSettings({ toneId: "bingbingbing" });
+    world.refuseField("toneId");
+
+    const runtime = world.sectionProps.runtime;
+    runtime.update({ toneId: "crisp-b" });
+    await new Promise((resolve) => setTimeout(resolve, 450));
+
+    assert.equal(world.settingsWrites.at(-1).field, "toneId", "the choice was attempted");
+    assert.equal(runtime.settings.getSnapshot().toneId, "crisp-b", "the page keeps the user's pick");
+    assert.equal(runtime.persistence.getSnapshot().mode, "host");
+  } finally {
+    world.browser.teardown();
+  }
+});
+
+test("each tone in the list can be selected and is written through", async () => {
+  const world = await bootRuntime();
+  try {
+    world.seedSettings({ toneId: "bingbingbing" });
+    const runtime = world.sectionProps.runtime;
+    const list = runtime.tones;
+    assert.ok(list.length >= 3, "several tones to step through");
+    assert.equal(list[0].id, "bingbingbing", "the default is first, so a step forward moves off it");
+
+    // The step arithmetic the arrows use: forward through the list, wrapping.
+    for (let index = 0; index < list.length; index++) {
+      const next = list[(index + 1) % list.length].id;
+      runtime.update({ toneId: next });
+      assert.equal(runtime.settings.getSnapshot().toneId, next, `the pick shows ${next} at once`);
+      // Past the 350 ms debounce, so each step is a separate write.
+      await new Promise((resolve) => setTimeout(resolve, 420));
+    }
+    const written = world.settingsWrites.filter((entry) => entry.field === "toneId").map((entry) => entry.value);
+    assert.equal(new Set(written).size, list.length, "every tone reached the host, not just the first");
+    assert.equal(runtime.settings.getSnapshot().toneId, list[0].id, "wrapping lands back on the first");
   } finally {
     world.browser.teardown();
   }

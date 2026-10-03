@@ -24,3 +24,4 @@ jobs:
       # tools/embed-tones.ps1 -Check does this on Windows; on Linux the same
       # comparison runs in node: see tools/check-embedded-tone.mjs.
       - run: node tools/check-embedded-tone.mjs
+      - run: node tools/check-no-local-tones.mjs
