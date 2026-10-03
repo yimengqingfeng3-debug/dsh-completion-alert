@@ -122,6 +122,12 @@ function installBrowser() {
   };
 
   const document = makeDocument();
+  // In a browser window === globalThis, and the plugin reads `window.AudioContext`
+  // (the standard placement). Point the test's window at its own globalThis so a
+  // fake AudioContext installed for one test is the one the plugin finds; the
+  // module-loader entry is carried on the same object.
+  globalThis.window = globalThis;
+  globalThis.__ModuleLoader__ = null;
   setGlobal("window", globalThis);
   setGlobal("document", document);
   setGlobal("atob", (value) => Buffer.from(String(value), "base64").toString("binary"));
@@ -137,6 +143,8 @@ function installBrowser() {
     return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
   });
   setGlobal("requestAnimationFrame", (callback) => setTimeout(callback, 0));
+  // Model a window without Web Audio; a test that needs one installs its fake on
+  // the sandbox after booting (see installFakeAudio), so this never clobbers it.
   setGlobal("AudioContext", undefined);
 
   return {
@@ -194,20 +202,11 @@ function makeReact() {
 function loadBundle({ react }) {
   const registrations = [];
   const browser = installBrowser();
-  const sandboxWindow = {
-    __ModuleLoader__: {
-      load(definition) {
-        registrations.push(definition);
-      }
-    },
-    addEventListener() {},
-    removeEventListener() {},
-    setTimeout,
-    clearTimeout
-  };
-  globalThis.window = sandboxWindow;
+  // The bundle registers itself on `window.__ModuleLoader__`, and the sandbox's
+  // window is its globalThis (see installBrowser), so the loader is installed on
+  // the sandbox context once it exists.
   const context = {
-    window: sandboxWindow,
+    window: null,
     document: globalThis.document,
     fetch: globalThis.fetch,
     atob: globalThis.atob,
@@ -245,6 +244,17 @@ function loadBundle({ react }) {
     parseInt
   };
   context.globalThis = context;
+  // The sandbox's window is the sandbox itself, and it carries the loader the
+  // bundle registers through. AudioContext is mirrored in from the host global:
+  // the plugin reads `globalThis.AudioContext ?? globalThis.webkitAudioContext`,
+  // which is where a browser exposes it.
+  context.window = context;
+  context.__ModuleLoader__ = {
+    load(definition) {
+      registrations.push(definition);
+    }
+  };
+  context.AudioContext = globalThis.AudioContext;
   vm.createContext(context);
   const require = (specifier) => {
     // The harness answers exactly what the real module loader answers: react
@@ -376,10 +386,12 @@ function setRunning(store, sessionId, running) {
 /** Build the fake client context bundle the module needs. */
 async function boot(options = {}) {
   const react = makeReact();
-  const { module, browser } = loadBundle({ react });
+  const { module, browser, context } = loadBundle({ react });
   const world = makeContext(options);
   module.apply(world.ctx);
-  return { module, react, browser, ...world };
+  // `context` is the vm sandbox the bundle runs in: audio tests install their
+  // fake AudioContext there, because the plugin reads it off `globalThis`.
+  return { module, react, browser, context, ...world };
 }
 
 // ---------------------------------------------------------------------------
@@ -736,6 +748,7 @@ async function bootRuntime(options = {}) {
   const world = await boot(options);
   const overlay = world.slots.find((slot) => slot.name === "shell.overlay");
   const section = world.slots.find((slot) => slot.name === "settings.section");
+  // `context` comes along so an audio test can install its fake on the sandbox.
   return { ...world, overlay, section, props: overlay?.props, sectionProps: section?.props };
 }
 
@@ -893,6 +906,232 @@ test("activation facts are reported to the diagnostics route", async () => {
     assert.equal(activation.facts.overlay, true);
     assert.equal(activation.facts.settings, true);
   } finally {
+    world.browser.teardown();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// The audio path, against a fake AudioContext
+// ---------------------------------------------------------------------------
+
+/**
+ * A stand-in for the Web Audio API that records what a real one would receive.
+ *
+ * It starts `suspended` like a context created outside a user gesture, and
+ * `resume()` settles on a microtask — the two properties that decide whether a
+ * preview is audible in Chrome.
+ */
+function fakeAudioContext(options = {}) {
+  const log = { created: 0, resumes: 0, starts: [], stops: 0, decodes: 0, throwsOnStart: options.throwsOnStart === true };
+  const makeParam = () => ({ value: 0 });
+  const context = {
+    state: options.startRunning === true ? "running" : "suspended",
+    sampleRate: 48000,
+    destination: {},
+    resume() {
+      log.resumes += 1;
+      if (options.resumeFails === true) return Promise.reject(new Error("gesture required"));
+      return Promise.resolve().then(() => {
+        context.state = "running";
+      });
+    },
+    decodeAudioData(bytes, onSuccess) {
+      log.decodes += 1;
+      // Half a second of audio, enough for the "whole tone" assertion below.
+      const frames = 24000;
+      const data = new Float32Array(frames);
+      for (let index = 0; index < frames; index++) data[index] = Math.sin((index / 48) % (2 * Math.PI)) * 0.5;
+      const buffer = {
+        numberOfChannels: 1,
+        sampleRate: 48000,
+        length: frames,
+        duration: frames / 48000,
+        getChannelData: () => data
+      };
+      setTimeout(() => onSuccess(buffer), 0);
+    },
+    createBufferSource() {
+      const node = {
+        buffer: null,
+        onended: null,
+        connect() {},
+        start(when, offset, duration) {
+          if (log.throwsOnStart) throw new Error("start refused");
+          log.starts.push({ when, offset, duration });
+        },
+        stop() {
+          log.stops += 1;
+        }
+      };
+      return node;
+    },
+    createGain: () => ({ gain: makeParam(), connect() {} })
+  };
+  return { context, log, Ctor: function FakeAudioContext() {
+    log.created += 1;
+    return context;
+  } };
+}
+
+/**
+ * Install a fake AudioContext on a booted sandbox.
+ *
+ * The plugin reads `globalThis.AudioContext` when it first needs a context (not
+ * at load), and `installBrowser` models a window without Web Audio by setting it
+ * to undefined — so a test installs its stand-in here, after booting.
+ * @param context - the sandbox the bundle runs in.
+ * @param options - passed through to the fake.
+ * @returns `{ log, restore }`.
+ */
+function installFakeAudio(context, options) {
+  const fake = fakeAudioContext(options);
+  context.AudioContext = fake.Ctor;
+  return {
+    log: fake.log,
+    restore() {
+      context.AudioContext = undefined;
+    }
+  };
+}
+
+/** Let the decode/resume microtasks and the fake's timers run. */
+const settle = () => new Promise((resolve) => setTimeout(resolve, 5));
+
+test("a preview resumes the context synchronously, then starts the tone", async () => {
+  const { module, browser, context } = await boot();
+  const audio = installFakeAudio(context);
+  try {
+    const alert = module.createAlert({ report: () => {} });
+    alert.configure({ ...module.DEFAULT_SETTINGS, toneId: "crisp-a" });
+    // The context starts suspended, like a freshly loaded window.
+    const accepted = alert.previewTone("crisp-a", null);
+    assert.equal(accepted, true, "the preview is accepted");
+    // resume() must already have been asked for before any await: Chrome only
+    // honours it while the click's activation is still live.
+    assert.equal(audio.log.resumes, 1, "resume must be called synchronously");
+    await alert.settled();
+    await settle();
+    assert.equal(audio.log.starts.length, 1, "exactly one tone starts");
+    assert.equal(audio.log.starts[0].offset, 0);
+    assert.ok(audio.log.starts[0].duration > 0.2, "the whole tone is scheduled");
+    assert.equal(alert.state().failure, "", "no failure is reported");
+  } finally {
+    audio.restore();
+    browser.teardown();
+  }
+});
+
+test("every library tone previews, and each one decodes once", async () => {
+  const { module, browser, context } = await boot();
+  const audio = installFakeAudio(context, { startRunning: true });
+  try {
+    const alert = module.createAlert({ report: () => {} });
+    alert.configure(module.DEFAULT_SETTINGS);
+    for (const tone of module.TONE_LIBRARY) {
+      alert.previewTone(tone.id, null);
+      await alert.settled();
+      await settle();
+    }
+    assert.equal(audio.log.starts.length, module.TONE_LIBRARY.length, "one start per tone");
+    const unique = new Set(module.TONE_LIBRARY.map((tone) => tone.id));
+    assert.equal(unique.size, module.TONE_LIBRARY.length);
+    assert.equal(alert.state().failure, "");
+  } finally {
+    audio.restore();
+    browser.teardown();
+  }
+});
+
+test("a slice preview schedules only the slice", async () => {
+  const { module, browser, context } = await boot();
+  const audio = installFakeAudio(context, { startRunning: true });
+  try {
+    const alert = module.createAlert({ report: () => {} });
+    alert.configure(module.DEFAULT_SETTINGS);
+    alert.previewTone("crisp-a", { start: 0.05, duration: 0.1 });
+    await alert.settled();
+    await settle();
+    assert.equal(audio.log.starts.length, 1);
+    assert.equal(audio.log.starts[0].offset, 0.05);
+    assert.ok(Math.abs(audio.log.starts[0].duration - 0.1) < 0.001, "the slice duration is honoured");
+  } finally {
+    audio.restore();
+    browser.teardown();
+  }
+});
+
+test("a refused start reports start-failed instead of going silent", async () => {
+  const { module, browser, context } = await boot();
+  const audio = installFakeAudio(context, { startRunning: true, throwsOnStart: true });
+  try {
+    const alert = module.createAlert({ report: () => {} });
+    alert.configure(module.DEFAULT_SETTINGS);
+    alert.previewTone("crisp-a", null);
+    await alert.settled();
+    await settle();
+    assert.equal(audio.log.starts.length, 0);
+    assert.equal(alert.state().failure, "start-failed", "the reason is observable");
+  } finally {
+    audio.restore();
+    browser.teardown();
+  }
+});
+
+test("a context that never resumes reports awaiting-gesture", async () => {
+  const { module, browser, context } = await boot();
+  const audio = installFakeAudio(context, { resumeFails: true });
+  try {
+    const alert = module.createAlert({ report: () => {} });
+    alert.configure(module.DEFAULT_SETTINGS);
+    alert.previewTone("crisp-a", null);
+    await alert.settled();
+    await settle();
+    assert.equal(audio.log.starts.length, 0, "nothing plays while suspended");
+    assert.equal(alert.state().failure, "awaiting-gesture");
+  } finally {
+    audio.restore();
+    browser.teardown();
+  }
+});
+
+test("a window without AudioContext reports no-audio-context", async () => {
+  const { module, browser, context } = await boot();
+  try {
+    assert.equal(context.AudioContext, undefined, "this window has no Web Audio");
+    const alert = module.createAlert({ report: () => {} });
+    alert.configure(module.DEFAULT_SETTINGS);
+    assert.equal(alert.previewTone("crisp-a", null), false);
+    assert.equal(alert.state().failure, "no-audio-context");
+  } finally {
+    browser.teardown();
+  }
+});
+
+test("the settings facade previews the tone the arrows land on", async () => {
+  // Boot first (with no Web Audio), then hand the sandbox its fake: the alert's
+  // context is created lazily on the first preview, so the fake is the one it
+  // finds — exactly the production order, where a click comes after load.
+  const world = await bootRuntime();
+  const audio = installFakeAudio(world.context, { startRunning: true });
+  try {
+    const runtime = world.sectionProps.runtime;
+    // The switcher steps and previews through the facade, which is what the
+    // arrow buttons call.
+    runtime.alert.previewTone("crisp-b", null);
+    await settle();
+    assert.equal(audio.log.starts.length, 1, "an arrow step must produce sound");
+    assert.equal(runtime.alert.state().failure, "");
+    // The library rows go through the same call.
+    runtime.alert.previewTone("bingbingbing", null);
+    await settle();
+    assert.equal(audio.log.starts.length, 2, "a library preview must produce sound");
+    // And the trim dialog's slice preview goes through its own entry point.
+    runtime.alert.previewDataUrl("data:audio/wav;base64,AAAA", { start: 0.02, duration: 0.08 });
+    await settle();
+    assert.equal(audio.log.starts.length, 3, "a slice preview must produce sound");
+    assert.equal(audio.log.starts[2].offset, 0.02);
+  } finally {
+    audio.restore();
     world.browser.teardown();
   }
 });
