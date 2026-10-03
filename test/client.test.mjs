@@ -18,18 +18,23 @@ const here = dirname(fileURLToPath(import.meta.url));
 const bundleSource = readFileSync(join(here, "..", "lib", "client.js"), "utf8");
 
 /**
- * The base64 payload one built-in tone carries, read out of the harness's copy
- * of the generated tones module —?the same bytes the sandbox's bundle received.
- * The harness publishes it on `globalThis` because the sandbox's exports only
- * carry the library, not the payload map.
+ * Every 96-char base64 chunk of an asset, the way tools/embed-tones.ps1 writes
+ * them into the bundle's marked block.
+ *
+ * The block is asserted chunk by chunk rather than by re-parsing it: the claim
+ * worth testing is "the bundle carries exactly these bytes", and a chunk match
+ * proves it without depending on how the generator wraps or joins them.
  */
-function tonePayloadFromModule(module, toneId) {
-  const tonesModule = globalThis.__tonesModuleForTest;
-  assert.ok(tonesModule !== undefined, "the harness must expose the tones module");
-  const payload = tonesModule.TONE_BASE64[toneId];
-  assert.ok(typeof payload === "string" && payload.length > 0, `no payload for ${toneId}`);
-  assert.ok(module.TONE_LIBRARY.some((tone) => tone.id === toneId), `${toneId} must be in the library`);
-  return payload;
+function assetChunks(relativePath) {
+  const base64 = readFileSync(join(here, "..", relativePath)).toString("base64");
+  const chunks = [];
+  for (let index = 0; index < base64.length; index += 96) chunks.push(base64.slice(index, index + 96));
+  return chunks;
+}
+
+/** The bundle's marked tone block, or null. */
+function toneBlock() {
+  return /\/\/#region embedded-tones([\s\S]*?)\/\/#endregion embedded-tones/.exec(bundleSource);
 }
 
 // ---------------------------------------------------------------------------
@@ -189,11 +194,6 @@ function makeReact() {
 function loadBundle({ react }) {
   const registrations = [];
   const browser = installBrowser();
-  // The bundle's own copy of the generated tones module: a real ES module run in
-  // the sandbox, so the test asserts on the same payloads the browser decodes.
-  const tonesModule = { exports: {} };
-  const tonesCode = readFileSync(join(here, "..", "lib", "tones-data.js"), "utf8")
-    .replaceAll("export const ", "exports.");
   const sandboxWindow = {
     __ModuleLoader__: {
       load(definition) {
@@ -245,21 +245,16 @@ function loadBundle({ react }) {
     parseInt
   };
   context.globalThis = context;
-  context.tonesModule = tonesModule;
   vm.createContext(context);
-  vm.runInContext(`(function(exports){\n${tonesCode}\n})(tonesModule.exports)`, context, { filename: "tones-data.js" });
-  // The payload map is not part of the sandbox's exports; publish it so the
-  // drift assertions can compare the bundle's bytes with assets/.
-  globalThis.__tonesModuleForTest = tonesModule.exports;
   const require = (specifier) => {
-    // The harness owns these: react is the stub above (never the real package,
-    // which would need a DOM), the tones module is the generated one, and the
-    // primitives package is optional for the plugin —?requiring it must fail
-    // exactly like a shell that does not ship it.
+    // The harness answers exactly what the real module loader answers: react
+    // (the stub above, never the real package, which would need a DOM) and the
+    // optional primitives package, whose absence the plugin must tolerate. A
+    // relative specifier is refused here for the same reason the loader refuses
+    // it: it fails the whole web boot.
     if (specifier === "react") return react;
-    if (specifier === "./tones-data.js") return tonesModule.exports;
     if (specifier === "@deepseek-ai/dsh-client-ui-primitives") throw new Error("not installed");
-    throw new Error(`unexpected require: ${specifier}`);
+    throw new Error(`client-modules: require("${specifier}") missed the module table`);
   };
   vm.runInContext(bundleSource, context, { filename: "client.js" });
   assert.equal(registrations.length, 1, "the bundle registers exactly one module");
@@ -402,44 +397,62 @@ test("the bundle exports the module face the loader expects", async () => {
   }
 });
 
-test("every built-in tone is a real Ogg payload the bundle can reach", async () => {
+test("every built-in tone is inline, and the audio decoder can reach it", async () => {
   const { module, browser } = await boot();
   try {
     assert.ok(module.TONE_LIBRARY.length >= 3, "the library ships more than one tone");
+    const block = toneBlock();
+    assert.ok(block !== null, "the bundle must carry the marked embedded-tones block");
     for (const tone of module.TONE_LIBRARY) {
-      const payload = tonePayloadFromModule(module, tone.id);
-      assert.ok(payload.length > 500, `${tone.id} must carry a payload`);
-      const bytes = module.base64ToBytes(payload);
-      // Ogg pages start with "OggS"; every tone must be one.
-      assert.equal(String.fromCharCode(bytes[0], bytes[1], bytes[2], bytes[3]), "OggS", `${tone.id} is not an Ogg stream`);
+      // The library entry and the generated payload map must agree...
+      assert.ok(block[1].includes(`'${tone.id}':`), `${tone.id} must have a payload entry`);
       assert.equal(tone.source, `${tone.id}.ogg`, `${tone.id} must name the asset it came from`);
+      // ...and the payload itself must be present verbatim.
+      const chunks = assetChunks(join("assets", tone.source));
+      assert.ok(chunks.length > 1, `${tone.id} must be a real payload, not a stub`);
+      for (const chunk of chunks) {
+        assert.ok(block[1].includes(`'${chunk}'`), `${tone.id} is missing a payload chunk — run tools/embed-tones.ps1`);
+      }
     }
   } finally {
     browser.teardown();
   }
 });
 
-test("every built-in tone matches its packaged asset (no drift)", async () => {
+test("the inline tones are the packaged assets, byte for byte", async () => {
   const { module, browser } = await boot();
   try {
+    const block = toneBlock();
     for (const tone of module.TONE_LIBRARY) {
-      const asset = readFileSync(join(here, "..", "assets", tone.source));
-      assert.equal(tonePayloadFromModule(module, tone.id), asset.toString("base64"), `${tone.id} drifted from assets/${tone.source} —?run tools/embed-tones.ps1`);
+      // Reassemble what the block carries and compare with the asset.
+      const chunks = assetChunks(join("assets", tone.source));
+      const carried = chunks.every((chunk) => block[1].includes(`'${chunk}'`));
+      assert.ok(carried, `${tone.id} drifted from assets/${tone.source} - run tools/embed-tones.ps1`);
+      // Ogg pages start with "OggS"; the payload must be one.
+      const bytes = readFileSync(join(here, "..", "assets", tone.source));
+      assert.equal(bytes.subarray(0, 4).toString("ascii"), "OggS", `${tone.source} is not an Ogg stream`);
     }
   } finally {
     browser.teardown();
   }
 });
 
-test("the tones module is the only file the bundle requires", async () => {
-  const requires = [...bundleSource.matchAll(/require\((["'])([^"']+)\1\)/g)].map((match) => match[2]);
+test("the bundle requires nothing but react and registered packages", async () => {
+  // Comments are stripped first: the bundle's header explains *why* a relative
+  // require is forbidden and therefore quotes one.
+  const code = bundleSource
+    .replaceAll(/\/\*[\s\S]*?\*\//g, "")
+    .split("\n")
+    .map((line) => line.replace(/\/\/.*$/, ""))
+    .join("\n");
+  const requires = [...code.matchAll(/require\((["'])([^"']+)\1\)/g)].map((match) => match[2]);
   assert.ok(requires.includes("react"), "the bundle requires react");
   for (const specifier of requires) {
-    // Anything but react, the generated tones module and an optional primitives
-    // package would make the client module graph resolve a file the loader does
-    // not vouch for.
+    // Anything but react or a registered package factory would make the client
+    // module graph resolve something the loader does not vouch for — and that
+    // fails the whole web boot, not just this plugin.
     assert.ok(
-      specifier === "react" || specifier === "./tones-data.js" || specifier.startsWith("@deepseek-ai/"),
+      specifier === "react" || specifier.startsWith("@deepseek-ai/"),
       `unexpected require: ${specifier}`
     );
   }

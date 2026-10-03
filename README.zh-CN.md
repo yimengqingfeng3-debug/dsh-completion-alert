@@ -136,7 +136,7 @@ python tools/synthesize_tones.py assets            # 生成 WAV 母版
 python tools/synthesize_tones.py assets <ffmpeg>   # 再生成插件内嵌用的 Ogg
 ```
 
-重新内嵌进 `lib/tones-data.js`：
+重新内嵌进 bundle 里那段 `//#region embedded-tones` 标记块：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\embed-tones.ps1
@@ -169,10 +169,10 @@ dsh-completion-alert/
 ├─ lib/
 │  ├─ index.js              宿主半边：volatile 设置 schema + 诊断路由
 │  ├─ client.js             浏览器半边：完成检测 / 播放 / 通知层 / 设置页
-│  └─ tones-data.js         生成物：每个内置音效的 base64（embed-tones.ps1）
+
 ├─ tools/
 │  ├─ synthesize_tones.py   从零合成清脆音效（numpy）
-│  ├─ embed-tones.ps1       把 assets/ 重新嵌进 lib/tones-data.js（-Check 查漂移）
+│  ├─ embed-tones.ps1       把 assets/ 重新嵌进 lib/client.js（-Check 查漂移）
 │  ├─ embed-audio.ps1       转发到 embed-tones.ps1 的兼容壳
 │  └─ check-embedded-tone.mjs  漂移 + Ogg magic 检查（跨平台，CI 用）
 └─ test/

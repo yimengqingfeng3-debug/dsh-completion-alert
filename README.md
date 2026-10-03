@@ -136,7 +136,7 @@ python tools/synthesize_tones.py assets            # WAV masters
 python tools/synthesize_tones.py assets <ffmpeg>   # WAV + the Ogg the plugin embeds
 ```
 
-and re-embed them into `lib/tones-data.js` with
+and re-embed them into the bundle's marked `//#region embedded-tones` block with
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\embed-tones.ps1
@@ -168,11 +168,11 @@ dsh-completion-alert/
 │  └─ crisp-b.ogg/.wav      synthesized: the same, shorter and higher
 ├─ lib/
 │  ├─ index.js              host half: the volatile settings schema + diagnostics route
-│  ├─ client.js             browser half: detector, player, notice layer, settings page
-│  └─ tones-data.js         generated: every built-in tone as base64 (embed-tones.ps1)
+│  ├─ client.js             browser half: detector, player, notice layer, settings page, inline tones
+
 ├─ tools/
 │  ├─ synthesize_tones.py   renders the crisp tones from scratch (numpy)
-│  ├─ embed-tones.ps1       re-embeds assets/ into lib/tones-data.js (-Check for drift)
+│  ├─ embed-tones.ps1       re-embeds assets/ into lib/client.js (-Check for drift)
 │  ├─ embed-audio.ps1       shim that forwards to embed-tones.ps1
 │  └─ check-embedded-tone.mjs  drift + Ogg-magic check (cross-platform, CI)
 └─ test/
