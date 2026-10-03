@@ -13,3 +13,6 @@ Thumbs.db
 # Local-only tones: a recording this machine carries but the package does not.
 tools/tones.local.json
 assets/*.local.ogg
+
+# Host-side diagnosis snapshot (turn outcome listener).
+turn-outcomes.debug.json

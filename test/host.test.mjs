@@ -2,6 +2,10 @@
 // diagnostics route the browser half reports to.
 import test from "node:test";
 import assert from "node:assert/strict";
+import { existsSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import z from "@deepseek-ai/schemastery";
 
 import plugin, {
@@ -10,6 +14,7 @@ import plugin, {
   Config,
   DIAG_PATH,
   OUTCOME_PATH,
+  SETTINGS_PATH,
   apply,
   applyDiagnostics,
   applyTurnOutcomes,
@@ -19,7 +24,7 @@ import plugin, {
 } from "../lib/index.js";
 
 /** A minimal cordis-like context that records what the plugin registers. */
-function fakeContext({ withConnection = true, withSettings = true } = {}) {
+function fakeContext({ withConnection = true, withSettings = true, profileDir = mkdtempSync(join(tmpdir(), "dsh-ca-")) } = {}) {
   const effects = [];
   const provided = [];
   const warnings = [];
@@ -29,6 +34,7 @@ function fakeContext({ withConnection = true, withSettings = true } = {}) {
   /** event name -> listeners, for the turn-outcome listener. */
   const listeners = new Map();
   const ctx = {
+    profileContext: { dir: profileDir },
     logger: { warn: (message) => warnings.push(String(message)), info: () => {} },
     on: (event, listener) => {
       const bucket = listeners.get(event) ?? [];
@@ -79,6 +85,7 @@ function fakeContext({ withConnection = true, withSettings = true } = {}) {
     injected,
     routes,
     registrations,
+    profileDir,
     listeners,
     /** Fire one session event the way the app's agent runtime does. */
     emit(event, session, payload) {
@@ -167,13 +174,16 @@ test("every declared field validates on its own", () => {
 test("apply registers the diagnostics route and tolerates a settings service", () => {
   const { ctx, routes, registrations, warnings } = fakeContext();
   apply(ctx);
-  assert.equal(routes.length, 2, "the host half serves the report and the turn outcome");
+  assert.equal(routes.length, 3, "the host half serves the report, the turn outcome and its own settings store");
   const diag = routes.find((route) => route.path === DIAG_PATH);
   const outcome = routes.find((route) => route.path === OUTCOME_PATH);
   assert.ok(diag, "the diagnostics route is registered");
   assert.deepEqual(diag.methods, ["GET", "POST"]);
   assert.ok(outcome, "the turn-outcome route is registered");
   assert.deepEqual(outcome.methods, ["GET"]);
+  const store = routes.find((route) => route.path === SETTINGS_PATH);
+  assert.ok(store, "the plugin's own settings store is registered");
+  assert.deepEqual(store.methods, ["GET", "POST"]);
   assert.equal(registrations.length + warnings.length >= 1, true);
 });
 
@@ -211,6 +221,33 @@ test("the turn-outcome route reports how the newest turn ended", async () => {
   // An unknown reason still records, so the browser half can decide.
   emit("session/event", { header: { id: "s3" } }, { type: "turn/end", data: { turn: 1, reason: { kind: "interrupted" } } });
   assert.equal((await ask("s3")).kind, "interrupted");
+});
+
+test("the settings store round-trips a document", async () => {
+  const fake = fakeContext();
+  const { ctx, routes } = fake;
+  apply(ctx);
+  const route = routes.find((row) => row.path === SETTINGS_PATH);
+  const write = (settings) =>
+    route.fetch({ method: "POST", url: `http://localhost${SETTINGS_PATH}`, text: async () => JSON.stringify({ settings }) })
+      .then((response) => response.json());
+  const read = () => route.fetch({ method: "GET", url: `http://localhost${SETTINGS_PATH}` }).then((response) => response.json());
+
+  // Nothing stored yet reads as null rather than as a guess.
+  assert.equal((await read()).settings, null);
+
+  const document = { enabled: false, alertScope: "background", toneId: "crisp-b" };
+  assert.equal((await write(document)).ok, true, "a document is accepted");
+  const stored = await read();
+  assert.equal(stored.stored, true);
+  assert.equal(existsSync(join(fake.profileDir, "completion-alert.settings.json")), true, "the document is on disk");
+  assert.deepEqual(stored.settings, document);
+
+  // A malformed body is refused, not stored.
+  const bad = await route.fetch({ method: "POST", url: `http://localhost${SETTINGS_PATH}`, text: async () => "not json" })
+    .then((response) => response.json());
+  assert.equal(bad.ok, false);
+  assert.deepEqual((await read()).settings, document, "the stored document survives a bad write");
 });
 
 test("apply on a composition without settings or connection still succeeds", () => {

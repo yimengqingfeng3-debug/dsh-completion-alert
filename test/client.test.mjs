@@ -152,11 +152,21 @@ function installBrowser() {
    * What the host's turn-outcome route answers. `undefined` models a host that
    * cannot answer at all (no route), which the client must tolerate.
    */
-  const outcome = { kind: undefined };
+  const outcome = { kind: undefined, answerAfter: 0, asked: 0 };
   setGlobal("fetch", (url, options) => {
     posts.push({ url: String(url), options });
     if (String(url).startsWith("/api/completion-alert.outcome")) {
-      if (outcome.kind === undefined) return Promise.resolve({ ok: false, json: () => Promise.resolve({}) });
+      outcome.asked += 1;
+      // `answerAfter` models the Host appending `turn/end` a moment after the
+      // status projection reported the round finished: the first N questions are
+      // answered "unknown", exactly as measured in the running app.
+      if (outcome.kind === undefined || outcome.asked <= outcome.answerAfter) {
+        return Promise.resolve(
+          outcome.kind === undefined
+            ? { ok: false, json: () => Promise.resolve({}) }
+            : { ok: true, json: () => Promise.resolve({ kind: null, cause: "", turn: null, at: null }) }
+        );
+      }
       return Promise.resolve({
         ok: true,
         json: () => Promise.resolve({ kind: outcome.kind, cause: "", turn: 1, at: Date.now() })
@@ -174,6 +184,16 @@ function installBrowser() {
     posts,
     setOutcome(kind) {
       outcome.kind = kind;
+      outcome.asked = 0;
+    },
+    /** Answer "unknown" to the first `count` questions, then report `kind`. */
+    delayOutcome(kind, count) {
+      outcome.kind = kind;
+      outcome.asked = 0;
+      outcome.answerAfter = count;
+    },
+    get outcomeAsked() {
+      return outcome.asked;
     },
     teardown() {
       for (const key of keys) {
@@ -1049,6 +1069,46 @@ test("a hand-stopped round raises no notice, and the switch can allow it", async
     setRunning(world.status, "s1", false);
     await settle();
     assert.equal(world.props.store.getSnapshot().length, 1, "a completed round is announced");
+  } finally {
+    world.browser.teardown();
+  }
+});
+
+test("a round the Host records a moment late is still announced", async () => {
+  const world = await bootRuntime();
+  try {
+    world.sessions.set({
+      phase: "ready",
+      ids: ["s1"],
+      byId: { s1: { id: "s1", displayTitle: "迟到的记录", retainedBy: { mainView: 1 } } }
+    });
+    // Measured in the running app: the status flips to idle about 100 ms before
+    // the Host appends turn/end, so the first questions answer "unknown".
+    world.browser.delayOutcome("completed", 1);
+    setRunning(world.status, "s1", true);
+    setRunning(world.status, "s1", false);
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    assert.ok(world.browser.outcomeAsked > 1, "the lookup is retried");
+    assert.equal(world.props.store.getSnapshot().length, 1, "the late record still announces");
+  } finally {
+    world.browser.teardown();
+  }
+});
+
+test("a stop the Host never records stays quiet instead of being announced", async () => {
+  const world = await bootRuntime();
+  try {
+    world.sessions.set({
+      phase: "ready",
+      ids: ["s1"],
+      byId: { s1: { id: "s1", displayTitle: "没有记录", retainedBy: { mainView: 1 } } }
+    });
+    // No outcome ever: retrying must not turn "unknown" into an announcement.
+    world.browser.setOutcome(undefined);
+    setRunning(world.status, "s1", true);
+    setRunning(world.status, "s1", false);
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    assert.equal(world.props.store.getSnapshot().length, 0, "an unknown outcome stays silent");
   } finally {
     world.browser.teardown();
   }

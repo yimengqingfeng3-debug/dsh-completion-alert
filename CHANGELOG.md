@@ -1,5 +1,61 @@
 # Changelog
 
+## 1.7.0
+
+**The alert was silent for every completed round, and preferences were never
+stored. Both are fixed, and both were found by measurement rather than guesswork
+- the desktop renderer cannot be inspected, so the plugin was taught to report
+its own decisions.**
+
+### The tone arrived too early to be told apart from a stop
+
+The browser half detects "a round finished" from the client's session-status
+projection, and asks the Host how that turn ended before announcing it. Measured
+in the running app, with both sides timestamped:
+
+```
+17:20:28.355  the browser asks      -> outcome: "unknown"
+17:20:28.456  the Host records it   -> reason: { kind: "completed" }
+```
+
+The status projection flips to idle **about 100 ms before** the Host appends the
+durable `turn/end` event, so the first question was routinely answered "unknown"
+for rounds that finished normally. Since 1.6.0 an unknown outcome stays quiet
+(that is what keeps a hand-stopped round silent), which meant **every** natural
+completion was silent.
+
+The lookup is now retried (up to 6 times, 250 ms apart) while the answer is
+unknown, so the record is picked up as soon as it lands. An unknown that never
+resolves still stays quiet - the rule that stops a manual Stop from announcing is
+untouched.
+
+### Preferences were reported as saved and never stored
+
+The diagnostics showed every field write refused:
+
+```
+settingsWrite: { fields: "enabled", accepted: false }
+settingsWrite: { fields: "volume",  accepted: false }
+settingsWrite: { fields: "toneId",  accepted: false }
+```
+
+`ctx.configForms` falls back to `persistence: "memory"` on a non-loopback page,
+and a memory form answers every write with `false` - so the settings page looked
+like it saved and the choice was gone after a restart.
+
+The plugin now keeps its own document: the host half serves
+`GET/POST /api/completion-alert.settings`, writing
+`completion-alert.settings.json` beside the profile's other plugin data, and the
+browser half falls back to it whenever the transport cannot write. Preferences
+survive a restart either way; the scope row says which store is in use.
+
+### Diagnosis
+
+The browser half can mirror its reports to an absolute URL (`DIAG_MIRROR`, empty
+in a release build), and the host half writes what its `session/event` listener
+sees to `turn-outcomes.debug.json`. Both are what made the two faults above
+provable instead of guessable.
+
 ## 1.6.1
 
 **Why the uninstall button kept failing, and what actually fixes it.**
