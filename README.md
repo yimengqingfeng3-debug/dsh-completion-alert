@@ -179,6 +179,8 @@ Three tones ship with the plugin. Two of them are **original additive synthesis*
 The synthesiser is `tools/synthesize_tones.py`. Each note is a stack of decaying partials plus a very short band-limited noise burst at the onset (what makes a bell read as crisp), summed into a track with hand-placed onsets and mixed down. Two details are worth keeping if you edit it:
 
 * **Struck notes decay in dB, not in linear amplitude.** A linear `exp(-t / tau)` stays near its peak for the first `tau`, so a short note reads as a swell out of silence instead of a strike. Every note here falls as `10 ** (-3 * t / tau)`, which puts the peak at the attack — the same mistake produced an audible "crescendo" on the last note during development, and it is visible in a rendered envelope immediately.
+* **Never shape a whole track that is built from struck notes.** A note already decays to silence, so any window applied across the track lands on a note's attack and turns that strike into a swell. Only the last 25 ms is faded, to avoid ending on a step.
+
 * **A marimba's upper partials decay faster than its fundamental**, which is why the strike of `crisp-b` reads a fifth above and settles onto the fundamental. The 3rd and 5th partials are the loudest of the stack.
 
 Rebuild the assets with

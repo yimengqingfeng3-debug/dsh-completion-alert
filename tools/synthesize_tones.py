@@ -76,14 +76,16 @@ def fade(signal, fade_in=0.002, fade_out=0.02):
     return signal
 
 
-def hann_tail(signal, hold=0.05):
-    """Hold the onset flat, then taper the last part so nothing truncates hard."""
+def trim_tail(signal, fade_out=0.025):
+    """Fade only the last few milliseconds, so the file does not end on a step.
+
+    No whole-track shaping: a struck note already decays to nothing, and any
+    window applied across the track would land on a note's attack and turn it
+    into a swell.
+    """
     n = len(signal)
-    hold_len = int(SR * hold)
-    if hold_len >= n:
-        return signal
-    window = 0.5 - 0.5 * np.cos(np.pi * np.linspace(0.0, 1.0, n - hold_len))
-    signal[hold_len:] *= window
+    out_len = max(1, int(SR * fade_out))
+    signal[-out_len:] *= np.linspace(1.0, 0.0, out_len)
     return signal
 
 
@@ -174,7 +176,7 @@ def payment_chime():
     place(track, bell_note(upper, 0.46, amplitude=1.00, decay=0.20), 0.135)
     track = one_pole_highpass(track, 320)
     track = one_pole_lowpass(track, 11000)
-    return fade(hann_tail(normalize(track, 0.78), hold=0.26))
+    return fade(trim_tail(normalize(track, 0.78)))
 
 
 def message_tone():
@@ -194,7 +196,7 @@ def message_tone():
         place(track, marimba_note(freq, length, amplitude=gain), at)
     track = one_pole_highpass(track, 180)
     track = one_pole_lowpass(track, 9000)
-    return fade(hann_tail(normalize(track, 0.76), hold=0.30))
+    return fade(trim_tail(normalize(track, 0.76)))
 
 
 TONES = {
