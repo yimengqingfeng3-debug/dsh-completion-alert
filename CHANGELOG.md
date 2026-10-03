@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.7.1
+
+**The route that answers "how did that turn end" refused every request with a
+bare 400, which is why the alert was silent for every completed round.**
+
+A `connection.fetch` registration must declare `requestBody`. Every shipped GET
+route does (`/api/file`, the deliverable routes, …); the turn-outcome route did
+not, and the runtime then rejected each request **before** its handler - so the
+listener was never asked, the browser read the refusal as "unknown", and an
+unknown outcome stays quiet on purpose (that is what keeps a hand-stopped round
+silent).
+
+The chain, end to end:
+
+```
+the status projection flips to idle
+  -> the browser asks how the turn ended
+  -> the route answers 400 (missing requestBody)
+  -> the browser sees no answer
+  -> "unknown" -> silent
+```
+
+Found by reporting the *wire* result of each attempt rather than the parsed one:
+`outcomeFetch: { ok: false, status: 400 }` in the plugin's own report. Both fixes
+from 1.7.0 (the retry, and the plugin's own settings store) stay as they were -
+the retry was visibly working, six attempts 250 ms apart, all refused.
+
 ## 1.7.0
 
 **The alert was silent for every completed round, and preferences were never
