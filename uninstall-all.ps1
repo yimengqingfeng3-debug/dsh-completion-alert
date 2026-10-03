@@ -186,23 +186,28 @@ if (Test-Path $lockPath) {
   $dropped = 0
   for ($i = 0; $i -lt $lines.Count; $i++) {
     $line = $lines[$i]
-    # The importer entry under `dependencies:`.
+    # The importer entry is a key under `importers.` -> `.` -> `dependencies:`.
     if ($line -match "^\s{6}$([regex]::Escape($packageName)):\s*$") {
       $dropped += 1
-      # Skip its two more-indented continuation lines.
+      # Skip its more-indented continuation lines (`specifier:`, `version:`).
       while ($i + 1 -lt $lines.Count -and $lines[$i + 1] -match '^\s{8}\S') { $i += 1 }
       continue
     }
-    # A package/snapshot block: the key line plus everything more indented than it.
-    if ($line -match "^\s{2}$([regex]::Escape($packageName))@\S+:\s*$") {
-      $indent = $line.Length - $line.TrimStart().Length
+    # A package entry at ANY indent: `packages:` and `snapshots:` both key their
+    # blocks by `<name>@<version>`, one at two spaces and one at two as well in
+    # some pnpm versions, so match the key itself rather than a fixed column.
+    if ($line -match "^(\s*)$([regex]::Escape($packageName))@\S+:\s*(\{\}\s*)?$") {
+      $indent = $matches[1].Length
       $dropped += 1
-      while ($i + 1 -lt $lines.Count) {
-        $next = $lines[$i + 1]
-        if ($next.Trim() -eq '') { break }
-        $nextIndent = $next.Length - $next.TrimStart().Length
-        if ($nextIndent -le $indent) { break }
-        $i += 1
+      # An inline `{}` block ends on its own line; otherwise take the indented body.
+      if ($line -notmatch '\{\}\s*$') {
+        while ($i + 1 -lt $lines.Count) {
+          $next = $lines[$i + 1]
+          if ($next.Trim() -eq '') { break }
+          $nextIndent = $next.Length - $next.TrimStart().Length
+          if ($nextIndent -le $indent) { break }
+          $i += 1
+        }
       }
       continue
     }

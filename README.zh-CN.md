@@ -23,14 +23,21 @@
 
 ## 安装
 
-### 从本仓库安装（推荐）
+### 从 registry 装（插件管理器的做法）
+
+```
+dsh-completion-alert
+```
+
+把这个名字填进 **设置 → 内置插件 → 安装**。插件管理器会在 profile 里跑 `pnpm add`，记下依赖，并把这个包列进 `dsh.profile.bundles`。
+
+### 从本仓库安装（本地检出，不走包管理器）
 
 ```powershell
 git clone https://github.com/yimengqingfeng3-debug/dsh-completion-alert.git
 cd dsh-completion-alert
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1            # desktop profile
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Profile web
-powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Uninstall
 ```
 
 安装脚本是幂等的，改动前会备份：
@@ -43,13 +50,53 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Uninstall
 
 ### 手动安装
 
-把 `lib/`、`package.json`、`cordis.patch.yml` 复制到 profile 的 `node_modules/dsh-completion-alert`，再往 profile 的 `cordis.patch.yml` 加：
+把 `lib/`、`assets/`、`package.json`、`cordis.patch.yml` 复制到 profile 的 `node_modules/dsh-completion-alert`，再往 profile 的 `cordis.patch.yml` 加：
 
 ```yaml
 - insert:
     - id: completion-alert
       name: 'dsh-completion-alert'
 ```
+
+---
+
+## 卸载
+
+三条路都实测过，**都不需要插件本身配合**，也都不碰其他插件。
+
+### 1. 插件面板自带的卸载按钮
+
+**设置 → 内置插件 → dsh-completion-alert → 卸载。** 它会摘掉 bundle 登记与 patch 行（插件立刻不再加载），然后让 pnpm 删包。
+
+最后那一步有个已知问题：插件管理器调用的是 **app 自带的 pnpm（11.7.0）**，而这个版本在包发布不满 24 小时时会**忽略** profile 里的 `minimumReleaseAgeExclude` 豁免名单，于是 `pnpm remove` 可能报 `ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION`，界面显示"卸载失败" —— 尽管插件其实已经卸载了。PATH 上的 pnpm 12 认这份名单，同一条命令手跑就能过。
+
+无论哪种结果，界面自身状态是对的；可能留下的是 `node_modules` 里的那份拷贝和 `package.json` / `pnpm-lock.yaml` 里的条目 —— 下面两条路专门清这个。
+
+### 2. 彻底清理脚本（界面报错时推荐）
+
+**关掉 dsh**，然后：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\uninstall-all.ps1                 # desktop profile
+powershell -NoProfile -ExecutionPolicy Bypass -File .\uninstall-all.ps1 -Profile web
+powershell -NoProfile -ExecutionPolicy Bypass -File .\uninstall-all.ps1 -WhatIf        # 只打印计划，不改任何文件
+```
+
+它删除**并验证**以下每一处痕迹：
+
+| 位置 | 清掉什么 |
+| --- | --- |
+| `node_modules/dsh-completion-alert` | 包目录 |
+| `cordis.patch.yml` | 所有 `completion-alert` insert 行（安装失败可能留下不止一份） |
+| `package.json` | 依赖条目（如果插件管理器加过） |
+| `pnpm-lock.yaml` | importer 条目 + `packages:` / `snapshots:` 块 |
+| `pnpm-workspace.yaml` | 本包的 `minimumReleaseAgeExclude` 那一行 |
+
+每个被改写的文件都会备份到 `<profile>\.completion-alert-backup\`；它会逐项打印**故意没动**的东西（余额插件的目录、依赖、豁免、lockfile 条目都报告为 kept），最后再跑一次"应为空"的扫描，列出任何没清掉的引用。**务必在 dsh 关闭时运行**：应用运行期间占着 profile，退出时还可能把同样的文件写回去。
+
+### 3. 手动删
+
+删掉 `node_modules/dsh-completion-alert`，从 `cordis.patch.yml` 移除它的 `- insert:` 行，从 `package.json` 里去掉 `"dsh-completion-alert"`（`dsh.profile.bundles` 与 `dependencies` 两处），再清掉 `pnpm-lock.yaml` 里的条目。留着 lockfile 条目不会致命（pnpm 会报"lockfile 不是最新"，而不是做错事），上面那个脚本存在的意义就是让你不必手动做这些。
 
 ### 确认是否挂载
 
@@ -160,7 +207,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 dsh-completion-alert/
 ├─ package.json             dsh.pluginType=client、dsh.client.inject、bundle patch
 ├─ cordis.patch.yml         把 completion-alert 行插进 profile
-├─ install.ps1              安装 / 卸载（备份、patchReload=live、幂等）
+├─ install.ps1              安装（备份、patchReload=live、幂等），-Uninstall 亦可
 ├─ uninstall-all.ps1        把插件痕迹从 profile 里彻底清掉，不碰别的插件
 ├─ assets/                  内嵌工具读取的音源
 │  ├─ bingbingbing.ogg      梗音效（来源见 NOTICE）
@@ -185,7 +232,7 @@ dsh-completion-alert/
 
 ```bash
 npm install          # 拉取宿主半边 import 的 schemastery peer 依赖
-npm test             # 38 项测试
+npm test             # 45 项测试
 node tools/check-embedded-tone.mjs
 ```
 

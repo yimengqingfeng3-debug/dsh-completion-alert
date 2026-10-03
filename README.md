@@ -23,14 +23,21 @@ a round of work ends  (session running: true -> false)
 
 ## Install
 
-### From this repository (recommended)
+### From the registry (what the plugin manager does)
+
+```
+dsh-completion-alert
+```
+
+Paste that name into **Settings → Built-in plugins → Install**. The plugin manager runs `pnpm add` in the profile, records the dependency, and lists the package under `dsh.profile.bundles`.
+
+### From this repository (a checkout, no package manager)
 
 ```powershell
 git clone https://github.com/yimengqingfeng3-debug/dsh-completion-alert.git
 cd dsh-completion-alert
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1            # desktop profile
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Profile web
-powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Uninstall
 ```
 
 The installer is idempotent and backs up every file it edits:
@@ -43,13 +50,53 @@ The installer is idempotent and backs up every file it edits:
 
 ### Manually
 
-Copy `lib/`, `package.json` and `cordis.patch.yml` into the profile's `node_modules/dsh-completion-alert`, then add to the profile's `cordis.patch.yml`:
+Copy `lib/`, `assets/`, `package.json` and `cordis.patch.yml` into the profile's `node_modules/dsh-completion-alert`, then add to the profile's `cordis.patch.yml`:
 
 ```yaml
 - insert:
     - id: completion-alert
       name: 'dsh-completion-alert'
 ```
+
+---
+
+## Uninstall
+
+Three ways out, all verified. **None of them needs this plugin to cooperate**, and none touches any other plugin.
+
+### 1. The plugin manager's own button
+
+**Settings → Built-in plugins → dsh-completion-alert → 卸载 / Uninstall.** It removes the bundle listing and the patch row (so the plugin stops loading) and then asks pnpm to remove the package.
+
+Known issue with that last step: the plugin manager drives the pnpm **the app ships (11.7.0)**, and that version ignores the profile's `minimumReleaseAgeExclude` list when a package was published within the last 24 hours — so `pnpm remove` can fail with `ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION` and report a failed uninstall, even though the plugin is already unloaded. pnpm 12 (the one on your PATH) honours the list, so the same removal run by hand succeeds.
+
+Either way, the GUI's own state is correct after it returns. What can be left behind is the copy in `node_modules` and its entry in `package.json` / `pnpm-lock.yaml` — which is what the next two options clean up.
+
+### 2. The thorough script (recommended when the button complains)
+
+Close dsh, then:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\uninstall-all.ps1                 # desktop profile
+powershell -NoProfile -ExecutionPolicy Bypass -File .\uninstall-all.ps1 -Profile web
+powershell -NoProfile -ExecutionPolicy Bypass -File .\uninstall-all.ps1 -WhatIf        # show the plan, change nothing
+```
+
+It removes, and then verifies, every trace:
+
+| Where | What goes |
+| --- | --- |
+| `node_modules/dsh-completion-alert` | the package directory |
+| `cordis.patch.yml` | every `completion-alert` insert row (a failed install can leave more than one) |
+| `package.json` | the dependency entry, if the plugin manager added one |
+| `pnpm-lock.yaml` | the importer entry and the `packages:` / `snapshots:` blocks |
+| `pnpm-workspace.yaml` | this package's `minimumReleaseAgeExclude` line |
+
+Every file it rewrites is backed up to `<profile>\.completion-alert-backup\`, it prints what it left alone by name — the balance plugin's directory, dependency, exemptions and lockfile entries are all reported as untouched — and it finishes with a "should be none" scan that lists any reference it failed to remove. Run with dsh **closed**: the app holds the profile while it runs, and a closing app can write the same files back.
+
+### 3. By hand
+
+Delete `node_modules/dsh-completion-alert`, remove its `- insert:` row from `cordis.patch.yml`, drop `"dsh-completion-alert"` from `package.json` (both `dsh.profile.bundles` and `dependencies`) and its entries from `pnpm-lock.yaml`. Leaving the lockfile entry behind is not fatal — pnpm reports "lockfile is not up to date" rather than doing the wrong thing — but the script above exists so you do not have to.
 
 ### Verify it mounted
 
@@ -160,7 +207,7 @@ See [NOTICE](NOTICE) for the meme tone's provenance. The synthesized tones carry
 dsh-completion-alert/
 ├─ package.json             dsh.pluginType=client, dsh.client.inject, bundle patch
 ├─ cordis.patch.yml         inserts the completion-alert row into a profile
-├─ install.ps1              install / uninstall (backups, patchReload=live, idempotent)
+├─ install.ps1              install (backups, patchReload=live, idempotent); -Uninstall too
 ├─ uninstall-all.ps1        removes every trace from a profile, leaving other plugins alone
 ├─ assets/                  the tone sources the embedder reads
 │  ├─ bingbingbing.ogg      the meme tone (see NOTICE)
@@ -185,13 +232,24 @@ dsh-completion-alert/
 
 ```bash
 npm install          # pulls the schemastery peer dependency the host half imports
-npm test             # 38 tests
+npm test             # 45 tests
 node tools/check-embedded-tone.mjs
 ```
 
-The test suite is behavioural rather than structural: the client tests load the real bundle into a `vm` sandbox with a stub React, the generated tones module and a fake dsh client context, then drive the stores to assert the things that decide behaviour — the tone library and its payloads against the packaged assets, the first-snapshot baseline, the busy → idle edge, the *background only* scope, debounced persistence into the plugin's own namespace, navigation through `uiWorkspace`, and the notice queue. The host tests validate the schema surface (including that a volatile node sits at a fixed path with no volatile field inside it, which the app rejects) and the diagnostics route round-trip.
+The test suite is behavioural rather than structural: the client tests load the real bundle into a `vm` sandbox with a stub React, a fake AudioContext and a fake dsh client context, then drive the stores to assert the things that decide behaviour — the tone library and its payloads against the packaged assets, the first-snapshot baseline, the busy → idle edge, the *background only* scope, debounced persistence into the plugin's own namespace, navigation through `uiWorkspace`, and the notice queue. The host tests validate the schema surface (including that a volatile node sits at a fixed path with no volatile field inside it, which the app rejects) and the diagnostics route round-trip.
 
 CI (`.github/workflows/test.yml`) runs both plus the drift check on Node 24.
+
+## Troubleshooting
+
+| Symptom | What to do |
+| --- | --- |
+| Nothing happens at all | Reload the dsh window (`Ctrl+R`); check that `POST /api/completion-alert.diag` reports `watcher: true` |
+| Notices appear but there is no sound | Check **Play the tone** and the volume; if the "click anywhere to enable the alert sound" pill is up, click the window once |
+| A preview button does nothing | The player now reports why (`muted`, `no-audio-context`, `decode-failed`, `start-failed`, `awaiting-gesture`) — look for a `dsh-completion-alert` line in the renderer console |
+| The app will not start after installing | A client bundle that requires something the module loader cannot resolve fails the **whole web boot**. Boot with **Disable third-party plugins** from the crash dialog, then send the newest `%APPDATA%\@deepseek-ai\dsh-desktop\logs\crash-*-web-boot.log` |
+| The uninstall button reports failure | It already unloaded the plugin; run `uninstall-all.ps1` with dsh closed to remove the leftovers — see [Uninstall](#uninstall) |
+| A custom tone is refused | Over ~2 MB, or not decodable by the browser. Trim it shorter in the dialog |
 
 ## Known limitations
 
