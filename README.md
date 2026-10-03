@@ -173,10 +173,15 @@ Three tones ship with the plugin. Two of them are **original additive synthesis*
 | Tone | Source | Notes |
 | --- | --- | --- |
 | 冰冰冰 (`bingbingbing`) | `assets/bingbingbing.ogg` | the meme tone, cut to one 1.06 s round, 12 642 bytes |
-| Crisp (`crisp-a`) | `assets/crisp-a.ogg`, synthesized | one bright bell at E6, 0.34 s, 6 584 bytes |
-| Crisp short (`crisp-b`) | `assets/crisp-b.ogg`, synthesized | the same character a fifth up, 0.28 s, 6 082 bytes |
+| Crisp (`crisp-a`) | `assets/crisp-a.ogg`, synthesized | two ascending notes (F#6 -> F#7), the payment-confirmation shape, 0.50 s, 6 408 bytes |
+| Crisp short (`crisp-b`) | `assets/crisp-b.ogg`, synthesized | three ascending marimba notes (D4 -> A4 -> D5), the message-alert shape, 0.58 s, 6 901 bytes |
 
-The synthesiser is `tools/synthesize_tones.py`: decaying partials plus a very short band-limited noise burst (what makes a bell read as crisp), normalized and faded. Rebuild the assets with
+The synthesiser is `tools/synthesize_tones.py`. Each note is a stack of decaying partials plus a very short band-limited noise burst at the onset (what makes a bell read as crisp), summed into a track with hand-placed onsets and mixed down. Two details are worth keeping if you edit it:
+
+* **Struck notes decay in dB, not in linear amplitude.** A linear `exp(-t / tau)` stays near its peak for the first `tau`, so a short note reads as a swell out of silence instead of a strike. Every note here falls as `10 ** (-3 * t / tau)`, which puts the peak at the attack — the same mistake produced an audible "crescendo" on the last note during development, and it is visible in a rendered envelope immediately.
+* **A marimba's upper partials decay faster than its fundamental**, which is why the strike of `crisp-b` reads a fifth above and settles onto the fundamental. The 3rd and 5th partials are the loudest of the stack.
+
+Rebuild the assets with
 
 ```bash
 python tools/synthesize_tones.py assets            # WAV masters
@@ -257,7 +262,7 @@ CI (`.github/workflows/test.yml`) runs both plus the drift check on Node 24.
 - **Ogg only for the built-in replace path.** Custom uploads accept mp3/wav/ogg *for decoding* (Chromium decodes mp3 fine), but a payload embedded at build time must be Ogg.
 - **One tone at a time.** A completion arriving while the previous tone still rings replaces it rather than mixing.
 - **No OS-level notifications.** The notice is a dsh overlay card, so the plugin needs no Electron notification permission and stays consistent across web and desktop builds.
-- **One of the three tones is meme material.** The crisp tones are original synthesis; redistribute the meme tone only under the terms in NOTICE.
+- **One of the three tones is meme material.** The crisp tones are original synthesis modelled on measured facts about two well-known notification sounds (see NOTICE); redistribute the meme tone only under the terms in NOTICE.
 
 ## License
 

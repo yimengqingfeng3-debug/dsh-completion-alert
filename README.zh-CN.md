@@ -173,10 +173,15 @@ Chromium 在页面收到用户手势前不允许启动 `AudioContext`，而这�
 | 音效 | 素材 | 说明 |
 | --- | --- | --- |
 | 冰冰冰 (`bingbingbing`) | `assets/bingbingbing.ogg` | 梗音效，裁成一轮 1.06 秒的三连音，12 642 字节 |
-| 清脆提示 (`crisp-a`) | `assets/crisp-a.ogg`，合成 | E6 上的一声亮铃，0.34 秒，6 584 字节 |
-| 清脆短音 (`crisp-b`) | `assets/crisp-b.ogg`，合成 | 同样质感、高五度、更短，0.28 秒，6 082 字节 |
+| 清脆提示 (`crisp-a`) | `assets/crisp-a.ogg`，合成 | 两音上行（F#6 → F#7），付款确认那种干脆感，0.50 秒，6 408 字节 |
+| 清脆短音 (`crisp-b`) | `assets/crisp-b.ogg`，合成 | 三音上行马林巴（D4 → A4 → D5），短信提示那种，0.58 秒，6 901 字节 |
 
-合成脚本是 `tools/synthesize_tones.py`：衰减分音 + 一个极短的带限噪声爆发（就是它让铃声"脆"起来），再归一化与淡入淡出。重新生成：
+合成脚本是 `tools/synthesize_tones.py`：每个音是"一叠衰减分音 + 起音处一个极短的带限噪声爆发"（后者就是它让铃声"脆"起来的原因），按手放的起音位置叠进轨道，再混音。改写时有两个坑值得记住：
+
+* **敲击音要在 dB 上衰减，不是线性幅度。** 线性的 `exp(-t / tau)` 在前一个 `tau` 内几乎不降，短音听起来就是"从无声渐强"而不是"敲一下"。这里的每个音都按 `10 ** (-3 * t / tau)` 下落，峰值就落在起音上 —— 开发过程中正是这个错误让最后一个音出现了明显的"渐强"，而且渲染包络一看就露馅。
+* **马林巴的高次分音比基频衰减更快**，所以 `crisp-b` 的敲击瞬间听感高五度，再落回基频。第 3、5 分音是整叠里最响的。
+
+重新生成：
 
 ```bash
 python tools/synthesize_tones.py assets            # 生成 WAV 母版
@@ -211,8 +216,8 @@ dsh-completion-alert/
 ├─ uninstall-all.ps1        把插件痕迹从 profile 里彻底清掉，不碰别的插件
 ├─ assets/                  内嵌工具读取的音源
 │  ├─ bingbingbing.ogg      梗音效（来源见 NOTICE）
-│  ├─ crisp-a.ogg/.wav      合成：一声亮铃
-│  └─ crisp-b.ogg/.wav      合成：同样质感、更短更高
+│  ├─ crisp-a.ogg/.wav      合成：两音上行付款提示（F#6 → F#7）
+│  └─ crisp-b.ogg/.wav      合成：三音上行短信提示（D4 → A4 → D5）
 ├─ lib/
 │  ├─ index.js              宿主半边：volatile 设置 schema + 诊断路由
 │  ├─ client.js             浏览器半边：完成检测 / 播放 / 通知层 / 设置页
