@@ -162,7 +162,14 @@ if ($Uninstall) {
     Write-Host "removed $installDir"
   }
   if (Test-Bundled) {
-    Write-Host ''
+    if (-not $bundled -and -not $NoCopy) {
+  Write-Host ''
+  Write-Host 'NOTE: this installation mounts the row from the profile patch, which the'
+  Write-Host '      plugin manager cannot uninstall (it reports "other configurations are'
+  Write-Host '      still using this bundle''s components"). Run mount-as-bundle.ps1 with dsh'
+  Write-Host '      closed to mount it the way the manager manages bundles.'
+}
+Write-Host ''
     Write-Host "WARNING: this profile still lists '$packageName' under dsh.profile.bundles."
     Write-Host '         A listed bundle that is not installed fails startup, so remove that'
     Write-Host '         entry from package.json before starting dsh again.'

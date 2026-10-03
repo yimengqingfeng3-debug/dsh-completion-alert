@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.5.1
+
+**Uninstalling through the plugin manager now works.** The manager's uninstall
+disables the bundle and then checks that none of the bundle's rows is still
+loaded. A row installed through the profile's own `cordis.patch.yml` survives
+that step, so removal failed with *"other configurations are still using this
+bundle's components"* (`bundle-in-use`) - and `install.ps1` created exactly that
+situation by appending the manual row.
+
+`mount-as-bundle.ps1` moves an existing installation onto the bundle path (the
+way `dsh-cost-balance-indicator` is mounted): the package goes into
+`dsh.profile.bundles`, the redundant manual row is removed, and its own
+`cordis.patch.yml` supplies the row. Run it with dsh closed; backups end in
+`.bak-bundle`.
+
 ## 1.5.0
 
 **The arrows no longer snap back to 冰冰冰.** Picking a tone (or a scope) could be

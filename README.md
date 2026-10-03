@@ -66,6 +66,30 @@ Three ways out, all verified. **None of them needs this plugin to cooperate**, a
 
 ### 1. The plugin manager's own button
 
+**Mount the plugin as a bundle first, or the button cannot work.** The manager's
+uninstall disables the bundle, then checks that none of the bundle's rows is
+still loaded. A row that came from the profile's own `cordis.patch.yml` survives
+that step, so the removal fails with *"other configurations are still using this
+bundle's components"* (`bundle-in-use`) and the UI offers no way out.
+
+`install.ps1` used to append that manual row, which is what produced the failure.
+`mount-as-bundle.ps1` moves an existing installation onto the bundle path:
+
+```powershell
+# close dsh first: it holds the profile while it runs
+powershell -NoProfile -ExecutionPolicy Bypass -File .\mount-as-bundle.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\mount-as-bundle.ps1 -WhatIf   # preview
+```
+
+It adds the package to `dsh.profile.bundles`, removes the manual insert row (the
+package's own `cordis.patch.yml` supplies it once it is bundle-listed, and a
+duplicate row id is a hard boot failure), and adds the release-age exemption for
+the mounted version. Backups end in `.bak-bundle`.
+
+With the plugin bundle-mounted, the manager's button does the whole job: it
+unloads the plugin, drops the bundle listing and lets pnpm remove the package.
+
+
 **Settings → Built-in plugins → dsh-completion-alert → 卸载 / Uninstall.** It removes the bundle listing and the patch row (so the plugin stops loading) and then asks pnpm to remove the package.
 
 Known issue with that last step: the plugin manager drives the pnpm **the app ships (11.7.0)**, and that version ignores the profile's `minimumReleaseAgeExclude` list when a package was published within the last 24 hours — so `pnpm remove` can fail with `ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION` and report a failed uninstall, even though the plugin is already unloaded. pnpm 12 (the one on your PATH) honours the list, so the same removal run by hand succeeds.
