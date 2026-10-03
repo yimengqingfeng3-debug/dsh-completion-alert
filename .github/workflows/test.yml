@@ -20,7 +20,7 @@ jobs:
       # lets the host-half tests validate against the real schema engine.
       - run: npm install --no-audit --no-fund
       - run: npm test
-      # Fails when lib/client.js and assets/bingbingbing.ogg have drifted apart.
-      # tools/embed-audio.ps1 is PowerShell, so on Linux the comparison runs in
-      # node: see tools/check-embedded-tone.mjs.
+      # Fails when lib/tones-data.js and the assets in assets/ have drifted apart.
+      # tools/embed-tones.ps1 -Check does this on Windows; on Linux the same
+      # comparison runs in node: see tools/check-embedded-tone.mjs.
       - run: node tools/check-embedded-tone.mjs

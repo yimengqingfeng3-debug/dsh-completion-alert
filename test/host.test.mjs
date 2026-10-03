@@ -111,10 +111,11 @@ test("the declared defaults match the browser half's shipped defaults", () => {
   assert.equal(COMPLETION_ALERT_FIELDS.enabled.meta.default, true);
   assert.equal(COMPLETION_ALERT_FIELDS.soundEnabled.meta.default, true);
   assert.equal(COMPLETION_ALERT_FIELDS.alertScope.meta.default, "all");
-  assert.equal(COMPLETION_ALERT_FIELDS.soundSource.meta.default, "builtin");
+  assert.equal(COMPLETION_ALERT_FIELDS.toneId.meta.default, "bingbingbing");
   assert.equal(COMPLETION_ALERT_FIELDS.volume.meta.default, 0.9);
-  assert.equal(COMPLETION_ALERT_FIELDS.soundData.meta.default, "");
-  assert.equal(COMPLETION_ALERT_FIELDS.soundName.meta.default, "");
+  assert.equal(COMPLETION_ALERT_FIELDS.customData.meta.default, "");
+  assert.equal(COMPLETION_ALERT_FIELDS.customName.meta.default, "");
+  assert.equal(COMPLETION_ALERT_FIELDS.customRange.meta.default, null);
 });
 
 test("every declared field validates on its own", () => {
@@ -124,15 +125,17 @@ test("every declared field validates on its own", () => {
     enabled: [true, false],
     soundEnabled: [true, false],
     alertScope: ["all", "background"],
-    soundSource: ["builtin", "custom"],
+    toneId: ["bingbingbing", "crisp-a", "crisp-b", "custom"],
     volume: [0, 0.5, 1],
-    soundData: ["", "data:audio/ogg;base64,AAAA"],
-    soundName: ["", "my-tone.ogg"]
+    customData: ["", "data:audio/wav;base64,AAAA"],
+    customName: ["", "my-tone.ogg"],
+    customRange: [{ start: 0, end: 1.2 }, null]
   };
   for (const [field, values] of Object.entries(cases)) {
     const schema = COMPLETION_ALERT_FIELDS[field];
+    assert.equal(typeof schema, "function", `${field} must expose a schema`);
     for (const value of values) {
-      assert.equal(schema(value), value, `${field} rejected ${JSON.stringify(value)}`);
+      assert.deepEqual(schema(value), value, `${field} rejected ${JSON.stringify(value)}`);
     }
   }
 });

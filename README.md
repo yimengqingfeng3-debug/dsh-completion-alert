@@ -4,10 +4,10 @@
 
 A [dsh](https://github.com/deepseek-ai) (DeepSeek Harness) **client plugin** that tells you when a round of work has finished:
 
-- **plays a short alert tone** — the looping "bing bing bing" meme sound effect, cut to one 1.06 s round — the moment a session goes busy → idle;
+- **plays a short alert tone** — three ship by default: the "bing bing bing" meme tone plus two original synthesized crisp dings — the moment a session goes busy → idle;
 - **raises a notice card in the bottom-right corner** naming *which* session finished and how long it ran;
 - **clicking the card opens that session** in the main view;
-- **every part of it is configurable in Settings**: on/off, alert scope, sound on/off, volume, preview, and a **custom tone upload**.
+- **every part of it is configurable in Settings**: on/off, alert scope, sound on/off, volume, a tone library with instant preview, and a **custom tone you can trim on its own waveform**.
 
 The tone is embedded in the client bundle, so the plugin needs no host route, no on-disk asset and no network access. The notice layer and the settings page use dsh's own theme tokens and slot system, so they match the desktop app's look.
 
@@ -74,9 +74,9 @@ GET http://127.0.0.1:<port>/api/completion-alert.diag
 | When to alert | `All sessions`: every session that finishes; `Background only`: stay quiet for the session you are looking at |
 | Play the tone | Mutes the sound only; the notice still appears |
 | Volume | 0–100 %, applies to previews and alerts alike |
-| Preview | Plays the tone once with the current settings, changing nothing |
-| Custom tone | Upload an mp3 / wav / ogg to replace the built-in tone (under 3 s and ~2 MB is best), with a one-click clear |
-| Tone in use | `Built-in` / `Custom` |
+| Tone | `‹ current ›` steps through the tones and previews each step; the downward arrow opens the full library. Clicking the name replays it |
+| All tones | Every built-in tone with a preview button per row, then a **Custom tone** row that picks a local file |
+| Custom tone | Choose an mp3 / wav / ogg, then trim it on its waveform and save |
 
 Preferences live in this plugin's own settings namespace (`completion-alert`) inside the profile's settings document, so they survive a restart and reach every open window. On a client without the settings service the plugin still works and keeps its choices for the life of the page.
 
@@ -119,26 +119,38 @@ The settings page rides the theme's `--dsw-alias-*` variables throughout. The co
 
 ---
 
-## The audio
+## The tones
 
-The tone is a clip of the "bing bing bing" sound effect that circulates as a public meme, cut, levelled and trimmed to one clean round:
+Three tones ship with the plugin. Two of them are **original additive synthesis** — one clean bell-like ding, the character a system notification has — so nothing is sampled from another product and the package can carry them legally:
 
-| Version | File | Notes |
+| Tone | Source | Notes |
 | --- | --- | --- |
-| Source of the embed | `assets/bingbingbing.ogg` | 48 kHz mono Ogg Vorbis, 1.06 s, 12 642 bytes |
-| Packaged asset | — | the same payload, inlined in `lib/client.js` |
+| 冰冰冰 (`bingbingbing`) | `assets/bingbingbing.ogg` | the meme tone, cut to one 1.06 s round, 12 642 bytes |
+| Crisp (`crisp-a`) | `assets/crisp-a.ogg`, synthesized | one bright bell at E6, 0.34 s, 6 584 bytes |
+| Crisp short (`crisp-b`) | `assets/crisp-b.ogg`, synthesized | the same character a fifth up, 0.28 s, 6 082 bytes |
 
-Replace it with your own tone:
+The synthesiser is `tools/synthesize_tones.py`: decaying partials plus a very short band-limited noise burst (what makes a bell read as crisp), normalized and faded. Rebuild the assets with
+
+```bash
+python tools/synthesize_tones.py assets            # WAV masters
+python tools/synthesize_tones.py assets <ffmpeg>   # WAV + the Ogg the plugin embeds
+```
+
+and re-embed them into `lib/tones-data.js` with
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\embed-audio.ps1 -Source C:\path\to\your-tone.ogg
-powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\embed-audio.ps1 -Check   # fails when the bundle and the asset drift
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\embed-tones.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\embed-tones.ps1 -Check   # fails when they drift
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-The script validates the `OggS` magic, rewrites **only** the marked chunk, and preserves the bundle's UTF-8. **Ogg is required**: Chromium's `decodeAudioData` does not decode mp3, and embedding one would be pointless. Cross-platform equivalent: `node tools/check-embedded-tone.mjs`.
+The script validates the `OggS` magic on every asset before writing. **Ogg is required**: Chromium's `decodeAudioData` does not decode mp3, and embedding one would be pointless. Cross-platform equivalent: `node tools/check-embedded-tone.mjs`.
 
-See [NOTICE](NOTICE) for the asset's provenance — and note that the settings page lets any end user upload their own tone at runtime, which is the recommended path when distribution rights are unclear.
+### Custom tones, trimmed in place
+
+The settings offer a **Custom tone** entry. Picking a local file decodes it, draws its waveform, and opens a trim dialog: drag the start and end handles, audition exactly that slice, then save. Only the selected range is encoded (16-bit PCM WAV, the one container this plugin can write without an encoder) and stored in the settings document; 3 s or less is recommended, and anything over ~2 MB is refused rather than silently truncated.
+
+See [NOTICE](NOTICE) for the meme tone's provenance. The synthesized tones carry no such caveat, and an end user can always upload their own instead.
 
 ---
 
@@ -149,16 +161,23 @@ dsh-completion-alert/
 ├─ package.json             dsh.pluginType=client, dsh.client.inject, bundle patch
 ├─ cordis.patch.yml         inserts the completion-alert row into a profile
 ├─ install.ps1              install / uninstall (backups, patchReload=live, idempotent)
-├─ assets/bingbingbing.ogg  the tone source the embedder reads
+├─ uninstall-all.ps1        removes every trace from a profile, leaving other plugins alone
+├─ assets/                  the tone sources the embedder reads
+│  ├─ bingbingbing.ogg      the meme tone (see NOTICE)
+│  ├─ crisp-a.ogg/.wav      synthesized: one bright bell
+│  └─ crisp-b.ogg/.wav      synthesized: the same, shorter and higher
 ├─ lib/
 │  ├─ index.js              host half: the volatile settings schema + diagnostics route
-│  └─ client.js             browser half: detector, player, notice layer, settings page
+│  ├─ client.js             browser half: detector, player, notice layer, settings page
+│  └─ tones-data.js         generated: every built-in tone as base64 (embed-tones.ps1)
 ├─ tools/
-│  ├─ embed-audio.ps1       re-embed a tone (Windows)
+│  ├─ synthesize_tones.py   renders the crisp tones from scratch (numpy)
+│  ├─ embed-tones.ps1       re-embeds assets/ into lib/tones-data.js (-Check for drift)
+│  ├─ embed-audio.ps1       shim that forwards to embed-tones.ps1
 │  └─ check-embedded-tone.mjs  drift + Ogg-magic check (cross-platform, CI)
 └─ test/
    ├─ host.test.mjs         schema surface, volatile marker, diagnostics route
-   ├─ client.test.mjs       settings coercion, completion edges, scope, persistence, navigation
+   ├─ client.test.mjs       tone library, settings coercion, completion edges, persistence
    └─ loader.mjs / -hooks   resolves the schemastery peer dependency for the tests
 ```
 
@@ -166,20 +185,21 @@ dsh-completion-alert/
 
 ```bash
 npm install          # pulls the schemastery peer dependency the host half imports
-npm test             # 35 tests
+npm test             # 38 tests
 node tools/check-embedded-tone.mjs
 ```
 
-The test suite is behavioural rather than structural: the client tests load the real bundle into a `vm` sandbox with a stub React and a fake dsh client context, then drive the stores to assert the things that decide behaviour — the first-snapshot baseline, the busy → idle edge, the *background only* scope, debounced persistence into the plugin's own namespace, navigation through `uiWorkspace`, and the notice queue. The host tests validate the schema surface (including that a volatile node sits at a fixed path with no volatile field inside it, which the app rejects) and the diagnostics route round-trip.
+The test suite is behavioural rather than structural: the client tests load the real bundle into a `vm` sandbox with a stub React, the generated tones module and a fake dsh client context, then drive the stores to assert the things that decide behaviour — the tone library and its payloads against the packaged assets, the first-snapshot baseline, the busy → idle edge, the *background only* scope, debounced persistence into the plugin's own namespace, navigation through `uiWorkspace`, and the notice queue. The host tests validate the schema surface (including that a volatile node sits at a fixed path with no volatile field inside it, which the app rejects) and the diagnostics route round-trip.
 
 CI (`.github/workflows/test.yml`) runs both plus the drift check on Node 24.
 
 ## Known limitations
 
-- **Ogg only for custom tones.** mp3 uploads are rejected up front rather than silently failing to decode.
+- **Custom tones are stored as WAV.** The trim dialog writes 16-bit PCM because that is the only container the browser can encode without a library; 3 s or less keeps the settings document small.
+- **Ogg only for the built-in replace path.** Custom uploads accept mp3/wav/ogg *for decoding* (Chromium decodes mp3 fine), but a payload embedded at build time must be Ogg.
 - **One tone at a time.** A completion arriving while the previous tone still rings replaces it rather than mixing.
 - **No OS-level notifications.** The notice is a dsh overlay card, so the plugin needs no Electron notification permission and stays consistent across web and desktop builds.
-- **The sound is a meme asset.** Redistribute with your own tone if that matters for your use (see NOTICE).
+- **One of the three tones is meme material.** The crisp tones are original synthesis; redistribute the meme tone only under the terms in NOTICE.
 
 ## License
 

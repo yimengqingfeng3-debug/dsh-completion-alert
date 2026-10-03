@@ -74,9 +74,9 @@ GET http://127.0.0.1:<端口>/api/completion-alert.diag
 | 提示范围 | `全部会话`：任何会话完成都提示；`仅后台会话`：当前正在看的会话完成后不打扰 |
 | 播放提示音 | 只关声音，通知照常弹 |
 | 音量 | 0–100%，试听和正式提示音同时生效 |
-| 试听 | 按当前设置播放一次，不改动任何配置 |
-| 自定义提示音 | 上传 mp3 / wav / ogg 替换内置音（建议 3 秒内、约 2 MB 内），可一键清除 |
-| 当前使用的提示音 | `内置冰冰冰` / `自定义` |
+| 提示音 | `‹ 当前音效 ›` 左右箭头切换（**切换即试听**），点名字重播；右侧下拉箭头打开全部音效 |
+| 全部音效 | 覆盖页列出所有内置音效，每行带独立试听键；下方是**自定义音效**入口 |
+| 自定义音效 | 选择本地音频 → 在波形上拖选范围 → 试听这段 → 保存并使用 |
 
 偏好存在插件自己的设置命名空间 `completion-alert`（写进 profile 的设置文档），所以**重启保留、多窗口同步**。宿主不提供设置服务时插件照常工作，选择只在当前页面生命周期内有效。
 
@@ -119,26 +119,38 @@ Chromium 在页面收到用户手势前不允许启动 `AudioContext`，而这�
 
 ---
 
-## 音频
+## 提示音
 
-提示音是那段流行的「冰冰冰」循环梗音效，我把它裁剪、对齐、限制到干净的一轮：
+插件自带三个音效。其中两个是**从零做加法合成**的 —— 一声干净的钟式「叮」，也就是系统通知音的那种质感 —— 不是从任何产品里抓的采样，所以可以合法随包分发：
 
-| 版本 | 文件 | 说明 |
+| 音效 | 素材 | 说明 |
 | --- | --- | --- |
-| 内嵌源 | `assets/bingbingbing.ogg` | 48 kHz 单声道 Ogg Vorbis，1.06 s，12 642 字节 |
-| 打包产物 | — | 同一段 payload 内嵌在 `lib/client.js` 里 |
+| 冰冰冰 (`bingbingbing`) | `assets/bingbingbing.ogg` | 梗音效，裁成一轮 1.06 秒的三连音，12 642 字节 |
+| 清脆提示 (`crisp-a`) | `assets/crisp-a.ogg`，合成 | E6 上的一声亮铃，0.34 秒，6 584 字节 |
+| 清脆短音 (`crisp-b`) | `assets/crisp-b.ogg`，合成 | 同样质感、高五度、更短，0.28 秒，6 082 字节 |
 
-换成自己的提示音：
+合成脚本是 `tools/synthesize_tones.py`：衰减分音 + 一个极短的带限噪声爆发（就是它让铃声"脆"起来），再归一化与淡入淡出。重新生成：
+
+```bash
+python tools/synthesize_tones.py assets            # 生成 WAV 母版
+python tools/synthesize_tones.py assets <ffmpeg>   # 再生成插件内嵌用的 Ogg
+```
+
+重新内嵌进 `lib/tones-data.js`：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\embed-audio.ps1 -Source C:\path\to\your-tone.ogg
-powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\embed-audio.ps1 -Check   # bundle 与素材不一致时失败
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\embed-tones.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\embed-tones.ps1 -Check   # 素材与生成物不一致时失败
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-脚本会校验 `OggS` magic，**只**重写标记块，并保持 bundle 的 UTF-8 编码。**必须是 Ogg**：Chromium 的 `decodeAudioData` 不解码 mp3，内嵌 mp3 也没有意义。跨平台等价命令：`node tools/check-embedded-tone.mjs`。
+脚本写入前会逐个校验 `OggS` magic。**必须是 Ogg**：Chromium 的 `decodeAudioData` 不解码 mp3，内嵌 mp3 也没有意义。跨平台等价命令：`node tools/check-embedded-tone.mjs`。
 
-素材来源与再分发注意事项见 [NOTICE](NOTICE)；设置页允许任何终端用户运行时上传自己的提示音，这是版权不明确时推荐的做法。
+### 自定义音效：就地裁切
+
+设置里有一项**自定义音效**。选中本地文件后会解码、画出波形，并打开裁切对话框：拖动首尾两个把手、试听选中的那一段、保存。只有选中的片段会被编码（16-bit PCM WAV —— 浏览器不借助库能写出的唯一容器）并存入设置文档；建议 3 秒以内，超过约 2 MB 会被直接拒绝而不是悄悄截断。
+
+梗音效的来源与再分发注意事项见 [NOTICE](NOTICE)；两个合成音效没有这个问题，终端用户也随时可以上传自己的。
 
 ---
 
@@ -149,16 +161,23 @@ dsh-completion-alert/
 ├─ package.json             dsh.pluginType=client、dsh.client.inject、bundle patch
 ├─ cordis.patch.yml         把 completion-alert 行插进 profile
 ├─ install.ps1              安装 / 卸载（备份、patchReload=live、幂等）
-├─ assets/bingbingbing.ogg  内嵌工具读取的音源
+├─ uninstall-all.ps1        把插件痕迹从 profile 里彻底清掉，不碰别的插件
+├─ assets/                  内嵌工具读取的音源
+│  ├─ bingbingbing.ogg      梗音效（来源见 NOTICE）
+│  ├─ crisp-a.ogg/.wav      合成：一声亮铃
+│  └─ crisp-b.ogg/.wav      合成：同样质感、更短更高
 ├─ lib/
 │  ├─ index.js              宿主半边：volatile 设置 schema + 诊断路由
-│  └─ client.js             浏览器半边：完成检测 / 播放 / 通知层 / 设置页
+│  ├─ client.js             浏览器半边：完成检测 / 播放 / 通知层 / 设置页
+│  └─ tones-data.js         生成物：每个内置音效的 base64（embed-tones.ps1）
 ├─ tools/
-│  ├─ embed-audio.ps1       重新内嵌音源（Windows）
+│  ├─ synthesize_tones.py   从零合成清脆音效（numpy）
+│  ├─ embed-tones.ps1       把 assets/ 重新嵌进 lib/tones-data.js（-Check 查漂移）
+│  ├─ embed-audio.ps1       转发到 embed-tones.ps1 的兼容壳
 │  └─ check-embedded-tone.mjs  漂移 + Ogg magic 检查（跨平台，CI 用）
 └─ test/
    ├─ host.test.mjs         schema 表面、volatile 标记、诊断路由
-   ├─ client.test.mjs       设置清洗、完成边沿、提示范围、持久化、跳转
+   ├─ client.test.mjs       音效库、设置清洗、完成边沿、提示范围、持久化、跳转
    └─ loader.mjs / -hooks   给测试解析 schemastery 这个 peer 依赖
 ```
 
@@ -166,20 +185,21 @@ dsh-completion-alert/
 
 ```bash
 npm install          # 拉取宿主半边 import 的 schemastery peer 依赖
-npm test             # 35 项测试
+npm test             # 38 项测试
 node tools/check-embedded-tone.mjs
 ```
 
-测试是行为测试而不是结构快照：客户端测试把真实 bundle 载入 `vm` 沙箱，配一个 React 桩和伪造的 dsh 客户端上下文，然后直接驱动 store 去断言真正决定行为的那些点 —— 首个快照基线、忙→闲边沿、`仅后台会话` 范围、去抖写入自己的命名空间、经 `uiWorkspace` 跳转、以及通知队列。宿主测试校验 schema 表面（包括 volatile 节点位于固定路径、其内部不再套 volatile —— 这是应用会直接拒绝的形状）和诊断路由的往返。
+测试是行为测试而不是结构快照：客户端测试把真实 bundle 载入 `vm` 沙箱，配一个 React 桩、生成好的音效模块和伪造的 dsh 客户端上下文，然后直接驱动 store 去断言真正决定行为的那些点 —— 音效库与打包素材逐字节一致、首个快照基线、忙→闲边沿、`仅后台会话` 范围、去抖写入自己的命名空间、经 `uiWorkspace` 跳转、以及通知队列。宿主测试校验 schema 表面（包括 volatile 节点位于固定路径、其内部不再套 volatile —— 这是应用会直接拒绝的形状）和诊断路由的往返。
 
 CI（`.github/workflows/test.yml`）在 Node 24 上跑测试与漂移检查。
 
 ## 已知限制
 
-- **自定义音源只支持 Ogg**。mp3 会在上传时就被明确拒绝，而不是解码时静默失败。
+- **自定义音效存成 WAV**。裁切对话框写 16-bit PCM，因为那是浏览器不借助库能编码的唯一容器；3 秒以内可以保证设置文档不会太大。
+- **只有内嵌那一条路必须是 Ogg**。自定义上传 mp3/wav/ogg 都能解码（Chromium 解 mp3 没问题），但构建期内嵌的 payload 必须是 Ogg。
 - **同时只响一声**。上一声还没放完时来的新完成会替换它，而不是混在一起。
 - **不走系统级通知**。通知是 dsh 自己的浮层卡片，因此不需要 Electron 通知权限，Web 与桌面端表现一致。
-- **提示音是梗素材**。对再分发有要求的话请换成自己的音频（见 NOTICE）。
+- **提示音有三个，其中一个是梗素材**。两个清脆音是我自己合成的，没有版权顾虑；「冰冰冰」按 NOTICE 里的说明对待。
 
 ## 许可
 

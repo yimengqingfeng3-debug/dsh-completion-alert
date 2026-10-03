@@ -18,16 +18,18 @@ const here = dirname(fileURLToPath(import.meta.url));
 const bundleSource = readFileSync(join(here, "..", "lib", "client.js"), "utf8");
 
 /**
- * Read the tone payload straight out of the bundle's marked chunk: the whole
- * point of the chunk is that the shipped bundle needs no sibling file, so the
- * test must see the same copy the browser will run.
- * @returns the base64 payload, or "" when the chunk is empty.
+ * The base64 payload one built-in tone carries, read out of the harness's copy
+ * of the generated tones module —?the same bytes the sandbox's bundle received.
+ * The harness publishes it on `globalThis` because the sandbox's exports only
+ * carry the library, not the payload map.
  */
-function toneBase64FromBundle() {
-  const chunk = /\/\/#region embedded-tone([\s\S]*?)\/\/#endregion embedded-tone/.exec(bundleSource);
-  assert.ok(chunk !== null, "the bundle must carry the marked embedded-tone chunk");
-  const parts = [...chunk[1].matchAll(/'([A-Za-z0-9+/=]+)'/g)].map((match) => match[1]);
-  return parts.join("");
+function tonePayloadFromModule(module, toneId) {
+  const tonesModule = globalThis.__tonesModuleForTest;
+  assert.ok(tonesModule !== undefined, "the harness must expose the tones module");
+  const payload = tonesModule.TONE_BASE64[toneId];
+  assert.ok(typeof payload === "string" && payload.length > 0, `no payload for ${toneId}`);
+  assert.ok(module.TONE_LIBRARY.some((tone) => tone.id === toneId), `${toneId} must be in the library`);
+  return payload;
 }
 
 // ---------------------------------------------------------------------------
@@ -187,6 +189,11 @@ function makeReact() {
 function loadBundle({ react }) {
   const registrations = [];
   const browser = installBrowser();
+  // The bundle's own copy of the generated tones module: a real ES module run in
+  // the sandbox, so the test asserts on the same payloads the browser decodes.
+  const tonesModule = { exports: {} };
+  const tonesCode = readFileSync(join(here, "..", "lib", "tones-data.js"), "utf8")
+    .replaceAll("export const ", "exports.");
   const sandboxWindow = {
     __ModuleLoader__: {
       load(definition) {
@@ -204,13 +211,20 @@ function loadBundle({ react }) {
     document: globalThis.document,
     fetch: globalThis.fetch,
     atob: globalThis.atob,
+    btoa: globalThis.btoa,
     navigator: globalThis.navigator,
     matchMedia: globalThis.matchMedia,
     getComputedStyle: globalThis.getComputedStyle,
     setTimeout,
     clearTimeout,
     console,
+    // The plugin builds typed arrays and reads window.btoa when it encodes WAV.
     Uint8Array,
+    Uint16Array,
+    Int16Array,
+    Float32Array,
+    ArrayBuffer,
+    DataView,
     Map,
     Set,
     Symbol,
@@ -223,17 +237,27 @@ function loadBundle({ react }) {
     Promise,
     Error,
     TypeError,
+    RangeError,
     RegExp,
     Array,
-    isFinite
+    isFinite,
+    parseFloat,
+    parseInt
   };
   context.globalThis = context;
+  context.tonesModule = tonesModule;
   vm.createContext(context);
+  vm.runInContext(`(function(exports){\n${tonesCode}\n})(tonesModule.exports)`, context, { filename: "tones-data.js" });
+  // The payload map is not part of the sandbox's exports; publish it so the
+  // drift assertions can compare the bundle's bytes with assets/.
+  globalThis.__tonesModuleForTest = tonesModule.exports;
   const require = (specifier) => {
-    // The harness owns these two: react is the stub above (never the real
-    // package, which would need a DOM), and the primitives package is optional
-    // for the plugin, so requiring it must fail exactly like a shell without it.
+    // The harness owns these: react is the stub above (never the real package,
+    // which would need a DOM), the tones module is the generated one, and the
+    // primitives package is optional for the plugin —?requiring it must fail
+    // exactly like a shell that does not ship it.
     if (specifier === "react") return react;
+    if (specifier === "./tones-data.js") return tonesModule.exports;
     if (specifier === "@deepseek-ai/dsh-client-ui-primitives") throw new Error("not installed");
     throw new Error(`unexpected require: ${specifier}`);
   };
@@ -241,7 +265,7 @@ function loadBundle({ react }) {
   assert.equal(registrations.length, 1, "the bundle registers exactly one module");
   const definition = registrations[0];
   assert.equal(definition.id, "dsh-completion-alert");
-  return { module: definition.factory(require), definition, browser };
+  return { module: definition.factory(require), definition, browser, context };
 }
 
 // ---------------------------------------------------------------------------
@@ -378,62 +402,105 @@ test("the bundle exports the module face the loader expects", async () => {
   }
 });
 
-test("the embedded tone decodes to a real Ogg payload", async () => {
+test("every built-in tone is a real Ogg payload the bundle can reach", async () => {
   const { module, browser } = await boot();
   try {
-    assert.ok(module.TONE_BASE64.length > 1000, "the tone ships inside the bundle");
-    assert.equal(module.TONE_BASE64, toneBase64FromBundle(), "the bundle's chunk must be the payload the module reads");
-    const bytes = module.base64ToBytes(module.TONE_BASE64);
-    assert.ok(bytes.length > 1000);
-    // Ogg pages start with "OggS"; the payload must be one.
-    assert.equal(String.fromCharCode(bytes[0], bytes[1], bytes[2], bytes[3]), "OggS");
+    assert.ok(module.TONE_LIBRARY.length >= 3, "the library ships more than one tone");
+    for (const tone of module.TONE_LIBRARY) {
+      const payload = tonePayloadFromModule(module, tone.id);
+      assert.ok(payload.length > 500, `${tone.id} must carry a payload`);
+      const bytes = module.base64ToBytes(payload);
+      // Ogg pages start with "OggS"; every tone must be one.
+      assert.equal(String.fromCharCode(bytes[0], bytes[1], bytes[2], bytes[3]), "OggS", `${tone.id} is not an Ogg stream`);
+      assert.equal(tone.source, `${tone.id}.ogg`, `${tone.id} must name the asset it came from`);
+    }
   } finally {
     browser.teardown();
   }
 });
 
-test("the embedded tone is exactly the packaged asset (no drift)", async () => {
+test("every built-in tone matches its packaged asset (no drift)", async () => {
   const { module, browser } = await boot();
   try {
-    const asset = readFileSync(join(here, "..", "assets", "bingbingbing.ogg"));
-    assert.equal(module.TONE_BASE64, asset.toString("base64"), "lib/client.js fell out of sync with assets/bingbingbing.ogg — run tools/embed-audio.ps1");
-    assert.equal(module.TONE_SOURCE_NAME, "bingbingbing.ogg");
+    for (const tone of module.TONE_LIBRARY) {
+      const asset = readFileSync(join(here, "..", "assets", tone.source));
+      assert.equal(tonePayloadFromModule(module, tone.id), asset.toString("base64"), `${tone.id} drifted from assets/${tone.source} —?run tools/embed-tones.ps1`);
+    }
   } finally {
     browser.teardown();
   }
 });
 
-test("the bundle needs no sibling file: its requires are packages only", async () => {
+test("the tones module is the only file the bundle requires", async () => {
   const requires = [...bundleSource.matchAll(/require\((["'])([^"']+)\1\)/g)].map((match) => match[2]);
-  assert.ok(requires.length > 0, "the bundle requires react");
+  assert.ok(requires.includes("react"), "the bundle requires react");
   for (const specifier of requires) {
-    // A relative or bare-file specifier would make the client module graph
-    // resolve a file the module loader never vouches for.
-    assert.ok(specifier === "react" || specifier.startsWith("@deepseek-ai/"), `unexpected require: ${specifier}`);
+    // Anything but react, the generated tones module and an optional primitives
+    // package would make the client module graph resolve a file the loader does
+    // not vouch for.
+    assert.ok(
+      specifier === "react" || specifier === "./tones-data.js" || specifier.startsWith("@deepseek-ai/"),
+      `unexpected require: ${specifier}`
+    );
   }
 });
 
 test("sanitizeSettings coerces every unusable value back to its default", async () => {
   const { module, browser } = await boot();
   try {
-    const clean = module.sanitizeSettings(null);
-    assert.deepEqual(clean, module.DEFAULT_SETTINGS);
+    assert.deepEqual(module.sanitizeSettings(null), module.DEFAULT_SETTINGS);
     const coerced = module.sanitizeSettings({
       enabled: "yes",
       alertScope: "everything",
       soundEnabled: 1,
       volume: 42,
-      soundSource: "whatever",
-      soundData: "https://example.com/tone.mp3",
-      soundName: 7
+      toneId: "not-a-tone",
+      customData: "https://example.com/tone.mp3",
+      customName: 7,
+      customRange: { start: "a", end: "b" }
     });
     assert.equal(coerced.enabled, true);
     assert.equal(coerced.alertScope, "all");
     assert.equal(coerced.soundEnabled, true);
     assert.equal(coerced.volume, 1, "volume is clamped to 0..1");
-    assert.equal(coerced.soundSource, "builtin");
-    assert.equal(coerced.soundData, "", "only data: audio URLs are accepted");
-    assert.equal(coerced.soundName, "");
+    assert.equal(coerced.toneId, module.DEFAULT_TONE_ID, "an unknown tone id falls back to the default");
+    assert.equal(coerced.customData, "", "only data: audio URLs are accepted");
+    assert.equal(coerced.customName, "");
+    assert.equal(coerced.customRange, null);
+  } finally {
+    browser.teardown();
+  }
+});
+
+test("a stored custom tone survives, and 'custom' without a payload falls back", async () => {
+  const { module, browser } = await boot();
+  try {
+    const withCustom = module.sanitizeSettings({ toneId: module.CUSTOM_TONE_ID, customData: "data:audio/wav;base64,AAAA" });
+    assert.equal(withCustom.toneId, module.CUSTOM_TONE_ID);
+    assert.equal(withCustom.customData, "data:audio/wav;base64,AAAA");
+    const orphan = module.sanitizeSettings({ toneId: module.CUSTOM_TONE_ID, customData: "" });
+    assert.equal(orphan.toneId, module.DEFAULT_TONE_ID, "a missing payload must not leave the plugin silent");
+    const range = module.sanitizeSettings({ customRange: { start: 0.25, end: 1.75 } });
+    // The value crosses the sandbox boundary, so compare fields rather than
+    // object identity.
+    assert.equal(range.customRange?.start, 0.25);
+    assert.equal(range.customRange?.end, 1.75);
+    const badRange = module.sanitizeSettings({ customRange: { start: 2, end: 1 } });
+    assert.equal(badRange.customRange, null, "an inverted range is dropped");
+  } finally {
+    browser.teardown();
+  }
+});
+
+test("a 1.0.x document migrates onto the tone fields", async () => {
+  const { module, browser } = await boot();
+  try {
+    const legacyBuiltin = module.normalizeSettings({ soundSource: "builtin", soundData: "" });
+    assert.equal(legacyBuiltin.toneId, module.DEFAULT_TONE_ID);
+    const legacyCustom = module.normalizeSettings({ soundSource: "custom", soundData: "data:audio/wav;base64,AAAA", soundName: "old.wav" });
+    assert.equal(legacyCustom.toneId, module.CUSTOM_TONE_ID);
+    assert.equal(legacyCustom.customData, "data:audio/wav;base64,AAAA");
+    assert.equal(legacyCustom.customName, "old.wav");
   } finally {
     browser.teardown();
   }
@@ -457,10 +524,64 @@ test("effectiveSource picks the tone actually asked for", async () => {
   const { module, browser } = await boot();
   try {
     const base = module.DEFAULT_SETTINGS;
-    assert.equal(module.effectiveSource(base), "builtin");
-    assert.equal(module.effectiveSource({ ...base, soundSource: "custom", soundData: "data:audio/wav;base64,AA" }), "custom");
-    assert.equal(module.effectiveSource({ ...base, soundSource: "custom", soundData: "" }), "builtin", "no upload falls back");
+    assert.equal(module.effectiveSource(base), module.DEFAULT_TONE_ID);
+    assert.equal(module.effectiveSource({ ...base, toneId: "crisp-a" }), "crisp-a");
+    assert.equal(
+      module.effectiveSource({ ...base, toneId: module.CUSTOM_TONE_ID, customData: "data:audio/wav;base64,AA" }),
+      module.CUSTOM_TONE_ID
+    );
+    assert.equal(
+      module.effectiveSource({ ...base, toneId: module.CUSTOM_TONE_ID, customData: "" }),
+      module.DEFAULT_TONE_ID,
+      "a missing upload falls back to a built-in tone"
+    );
+    assert.equal(module.effectiveSource({ ...base, toneId: "gone-in-2.0" }), module.DEFAULT_TONE_ID, "an unknown id falls back");
     assert.equal(module.effectiveSource({ ...base, soundEnabled: false }), "none");
+  } finally {
+    browser.teardown();
+  }
+});
+
+test("the tone helpers drive the trim and the waveform", async () => {
+  const { module, browser } = await boot();
+  try {
+    // trimRange clamps onto the buffer and always keeps a usable slice.
+    const clamped = module.trimRange({ start: -1, end: 99 }, 3.5);
+    assert.equal(clamped.start, 0);
+    assert.equal(clamped.end, 3.5);
+    assert.equal(clamped.duration, 3.5);
+    const tiny = module.trimRange({ start: 1, end: 1.001 }, 3.5);
+    assert.ok(tiny.duration >= 0.049, "a slice never collapses to nothing");
+    assert.equal(module.formatSeconds(0.4567), "0.46s");
+
+    // The library steps in order and exposes every tone.
+    const ids = module.toneOptions().map((tone) => tone.id);
+    assert.equal(ids.join(","), module.TONE_LIBRARY.map((tone) => tone.id).join(","));
+    assert.ok(module.toneById("crisp-b").label.length > 0);
+    assert.equal(module.toneById("nope"), undefined);
+
+    // peaksOf reduces a decoded buffer to one min/max pair per column.
+    const samples = new Float32Array(100);
+    for (let index = 0; index < samples.length; index++) samples[index] = (index % 2 === 0 ? 1 : -1) * (index / 100);
+    const fake = {
+      numberOfChannels: 1,
+      duration: 1,
+      length: samples.length,
+      sampleRate: 100,
+      getChannelData: () => samples
+    };
+    const peaks = module.peaksOf(fake, 10);
+    assert.equal(peaks.length, 10);
+    assert.ok(peaks[9].max > peaks[0].max, "the envelope grows with the ramp");
+
+    // encodeWav writes a real RIFF/WAVE header around the chosen slice.
+    const wav = module.encodeWav(fake, { start: 0.2, duration: 0.3 });
+    assert.ok(wav.startsWith("data:audio/wav;base64,"), "the slice is a WAV data URL");
+    const bytes = Buffer.from(wav.slice("data:audio/wav;base64,".length), "base64");
+    assert.equal(bytes.subarray(0, 4).toString("ascii"), "RIFF");
+    assert.equal(bytes.subarray(8, 12).toString("ascii"), "WAVE");
+    // 0.3 s at 100 Hz mono 16-bit plus the 44-byte header.
+    assert.equal(bytes.length, 44 + 30 * 2);
   } finally {
     browser.teardown();
   }
@@ -472,7 +593,10 @@ test("duration and notice copy read the way a notice card should", async () => {
     assert.equal(module.formatDuration(18.4), "18 秒");
     assert.equal(module.formatDuration(72), "1 分 12 秒");
     assert.equal(module.formatDuration(undefined), "");
-    assert.equal(module.completionText("写周报", 72), "「写周报」已完成 · 用时 1 分 12 秒");
+    assert.equal(
+      module.completionText("写周报", 72),
+      "「写周报」已完成 · 用时 1 分 12 秒"
+    );
     assert.equal(module.completionText("写周报", undefined), "「写周报」已完成");
     assert.equal(module.sessionLabel({ displayTitle: "  压缩图标  " }), "压缩图标");
     assert.equal(module.sessionLabel({ displayTitle: "" }), "新会话");
@@ -629,7 +753,7 @@ test("a finished round queues a notice titled by its session", async () => {
     assert.equal(items.length, 1);
     assert.equal(items[0].sessionId, "s1");
     assert.equal(items[0].title, "压缩图标");
-    assert.match(items[0].detail, /已完成/);
+    assert.match(items[0].detail, /\u5df2\u5b8c\u6210/);
   } finally {
     world.browser.teardown();
   }
@@ -641,7 +765,7 @@ test("the notice opens its session through uiWorkspace", async () => {
     world.sessions.set({
       phase: "ready",
       ids: ["s1"],
-      byId: { s1: { id: "s1", displayTitle: "会话一", retainedBy: { mainView: 1 } } }
+      byId: { s1: { id: "s1", displayTitle: "压缩图标", retainedBy: { mainView: 1 } } }
     });
     setRunning(world.status, "s1", true);
     setRunning(world.status, "s1", false);
