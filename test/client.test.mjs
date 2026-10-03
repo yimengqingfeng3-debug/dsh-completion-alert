@@ -322,23 +322,42 @@ function makeStore(initial) {
 
 /**
  * Build a client context whose services can be driven from the test.
- * @param options.withSettingsScope - false to model a client without that service.
+ *
+ * The settings face is the real one: `configForms.get(ns)` handing back a form
+ * whose snapshot is `{ status, value, base, user, revision, writable, mode }` and
+ * whose `set(field, value)` answers with a **promise**. The legacy
+ * `settingsScope` service is also provided, so both paths stay covered.
+ * @param options.withSettingsForm - false to model a client with no settings transport.
+ * @param options.legacyOnly - true to expose only the legacy `settingsScope`.
  */
-function makeContext({ withSettingsScope = true } = {}) {
+function makeContext({ withSettingsForm = true, legacyOnly = false } = {}) {
+  /** Namespaces the plugin asked a form for. */
+  const configFormsRequested = [];
   const status = makeStore(new Map());
   const sessions = makeStore({ phase: "ready", ids: [], byId: {} });
   const settingsWrites = [];
-  const settingsState = { value: {} };
-  const settingsStore = makeStore(settingsState);
+  /** The form snapshot, exactly as the Host serves it. */
+  let formSnapshot = { status: "loading", value: undefined, writable: true, mode: "host", revision: 0 };
+  const formStore = makeStore(formSnapshot);
+  const publish = (patch) => {
+    formSnapshot = { ...formSnapshot, ...patch };
+    formStore.set(formSnapshot);
+  };
   const scope = {
-    getSnapshot: () => settingsState,
-    subscribe: settingsStore.subscribe,
+    getSnapshot: () => formSnapshot,
+    subscribe: formStore.subscribe,
     set: (field, value) => {
       settingsWrites.push({ field, value });
-      settingsState.value = { ...settingsState.value, [field]: value };
-      settingsStore.set(settingsState);
+      publish({
+        status: "ready",
+        value: { ...(formSnapshot.value ?? {}), [field]: value },
+        revision: formSnapshot.revision + 1
+      });
+      return Promise.resolve(true);
     }
   };
+  /** Seed the document the Host would already have stored. */
+  const seedSettings = (value) => publish({ status: "ready", value });
   const slots = [];
   const services = {
     uiSession: { sessionStatus: status },
@@ -349,7 +368,16 @@ function makeContext({ withSettingsScope = true } = {}) {
       }
     },
     opened: [],
-    settingsScope: withSettingsScope ? { bind: () => scope } : null
+    configFormsRequested,
+    settingsScope: withSettingsForm && legacyOnly ? { bind: () => scope } : null,
+    configForms: withSettingsForm && !legacyOnly
+      ? {
+          get: (namespace) => {
+            configFormsRequested.push(namespace);
+            return scope;
+          }
+        }
+      : null
   };
   /**
    * `slots` is both the service the plugin waits for and the registry it writes
@@ -398,7 +426,7 @@ function makeContext({ withSettingsScope = true } = {}) {
       return property in target || property in services;
     }
   });
-  return { ctx, status, sessions, slots, settingsWrites, settingsState, services, warnings, effects, scope };
+  return { ctx, status, sessions, slots, settingsWrites, seedSettings, services, warnings, effects, scope };
 }
 
 /** Drive one session's running state, then let the watcher observe it. */
@@ -868,6 +896,22 @@ test("disabling the feature stops both the notice and the tone", async () => {
   }
 });
 
+test("the alert scope is written through the settings form, and asked for by name", async () => {
+  const world = await bootRuntime();
+  try {
+    assert.equal(world.services.configFormsRequested[0], "completion-alert", "the form is the plugin's own entry");
+    world.sectionProps.runtime.update({ alertScope: "background" });
+    await new Promise((resolve) => setTimeout(resolve, 450));
+    const write = world.settingsWrites.find((entry) => entry.field === "alertScope");
+    assert.ok(write, "the scope choice must reach the host");
+    assert.equal(write.value, "background");
+    // The write answered asynchronously and was accepted, so the page says so.
+    assert.equal(world.sectionProps.runtime.persistence.getSnapshot().mode, "host");
+  } finally {
+    world.browser.teardown();
+  }
+});
+
 test("settings updates are pushed to the plugin's own namespace", async () => {
   const world = await bootRuntime();
   try {
@@ -878,25 +922,37 @@ test("settings updates are pushed to the plugin's own namespace", async () => {
     const fields = world.settingsWrites.map((write) => write.field);
     assert.ok(fields.includes("volume"), "volume must reach the host");
     assert.ok(fields.includes("alertScope"), "the scope choice must reach the host");
-    assert.equal(world.settingsState.value.volume, 0.4);
+    assert.equal(world.scope.getSnapshot().value.volume, 0.4);
   } finally {
     world.browser.teardown();
   }
 });
 
-test("the host document seeds the settings the page then follows", async () => {
+test("the stored document seeds the page, and a later revision follows", async () => {
   const world = await bootRuntime();
   try {
-    world.scope.set("soundEnabled", false);
-    const settings = world.sectionProps.runtime.settings.getSnapshot();
-    assert.equal(settings.soundEnabled, false, "a host revision must reach the store");
+    // Nothing is read while the form is still loading: writing the defaults over
+    // a document that has not arrived is the failure this guards.
+    assert.equal(world.sectionProps.runtime.settings.getSnapshot().alertScope, "all");
+
+    // The Host document lands.
+    world.seedSettings({ alertScope: "background", volume: 0.31, soundEnabled: false });
+    let settings = world.sectionProps.runtime.settings.getSnapshot();
+    assert.equal(settings.alertScope, "background", "the stored scope must reach the store");
+    assert.equal(settings.volume, 0.31);
+    assert.equal(settings.soundEnabled, false);
+
+    // Another window changes it; this page follows.
+    world.seedSettings({ alertScope: "all", volume: 0.31, soundEnabled: false });
+    settings = world.sectionProps.runtime.settings.getSnapshot();
+    assert.equal(settings.alertScope, "all", "a later host revision must reach the store");
   } finally {
     world.browser.teardown();
   }
 });
 
-test("a client without settingsScope still mounts everything", async () => {
-  const world = await bootRuntime({ withSettingsScope: false });
+test("a client without a settings form still mounts everything", async () => {
+  const world = await bootRuntime({ withSettingsForm: false });
   try {
     assert.ok(world.overlay, "the notice layer does not depend on settings");
     assert.ok(world.section, "the settings page still renders with local defaults");

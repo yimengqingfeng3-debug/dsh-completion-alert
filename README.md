@@ -127,7 +127,17 @@ GET http://127.0.0.1:<port>/api/completion-alert.diag
 | All tones | Every built-in tone with a preview button per row, then a **Custom tone** row that picks a local file |
 | Custom tone | Choose an mp3 / wav / ogg, then trim it on its waveform. **Preview slice** auditions exactly the range you selected, before anything is saved |
 
-Preferences live in this plugin's own settings namespace (`completion-alert`) inside the profile's settings document, so they survive a restart and reach every open window. On a client without the settings service the plugin still works and keeps its choices for the life of the page.
+Preferences live in this plugin's own settings namespace (`completion-alert`) inside the profile's settings document, so they survive a restart and reach every open window. Writes go through `ctx.configForms.get("completion-alert")`, the same transport the shipped settings pages use.
+
+The scope row says where the choices are going, so the three cases cannot be mistaken for each other:
+
+| Shown | Meaning |
+| --- | --- |
+| *saved in this profile* | writes land in the profile's settings document |
+| *the deployment stores settings read-only* | the transport is up but refuses writes (a non-loopback page, for instance) |
+| *this deployment offers no settings storage* | no `configForms` and no `settingsScope`, so choices last for the window only |
+
+The last two are properties of the deployment, not of this plugin. In particular, `configForms` is provided by `@deepseek-ai/dsh-client-ui-settings`; a profile that disables that plugin (an `enabled: false` patch row) has no settings storage for any plugin, and this page will say so.
 
 ---
 
