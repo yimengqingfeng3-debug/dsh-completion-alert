@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.6.1
+
+**Why the uninstall button kept failing, and what actually fixes it.**
+
+The plugin manager drives the pnpm the app ships (11.7.0), which checks the
+profile against a 24-hour release-age quarantine. That verdict is **cached for
+about a minute**: a removal right after a successful install passes, and one
+whose cache has expired fails with `ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION`. The
+exemption list (`minimumReleaseAgeExclude`) does not help here - 11.7.0 honours it
+during an install but not during the removal verification.
+
+The failure is also misleading: by the time pnpm refuses, the plugin manager has
+already unloaded the plugin and dropped its bundle listing, so the removal looks
+like it did nothing when in fact only the package directory is left.
+
+The fix is to disable the quarantine for the profile, which is what its own
+install script writes:
+
+```yaml
+# <profile>/pnpm-workspace.yaml
+minimumReleaseAge: 0
+```
+
+Both READMEs now document that, and the "known issue" paragraph that blamed the
+exemption list is gone.
+
 ## 1.6.0
 
 **Six requests, one bug.**

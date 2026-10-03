@@ -92,7 +92,16 @@ unloads the plugin, drops the bundle listing and lets pnpm remove the package.
 
 **Settings → Built-in plugins → dsh-completion-alert → 卸载 / Uninstall.** It removes the bundle listing and the patch row (so the plugin stops loading) and then asks pnpm to remove the package.
 
-Known issue with that last step: the plugin manager drives the pnpm **the app ships (11.7.0)**, and that version ignores the profile's `minimumReleaseAgeExclude` list when a package was published within the last 24 hours — so `pnpm remove` can fail with `ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION` and report a failed uninstall, even though the plugin is already unloaded. pnpm 12 (the one on your PATH) honours the list, so the same removal run by hand succeeds.
+Known issue with that last step: the plugin manager drives the pnpm **the app ships (11.7.0)**, and that version checks the profile against a 24-hour release-age quarantine. The check is **cached for about a minute**: a removal that follows a successful install usually passes, and one whose cache has expired fails with `ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION`. Because the quarantine is meant for *newly published* packages and this profile installs its own local builds, the reliable fix is to turn it off for the profile:
+
+```yaml
+# <profile>/pnpm-workspace.yaml
+minimumReleaseAge: 0
+```
+
+`minimumReleaseAgeExclude` alone is not enough: it is honoured during an install but not during the removal verification.
+
+Note what the failure message does *not* mean: the plugin was still unloaded. Check `dsh.profile.bundles` and `dependencies` in the profile's `package.json` before assuming the removal did nothing.
 
 Either way, the GUI's own state is correct after it returns. What can be left behind is the copy in `node_modules` and its entry in `package.json` / `pnpm-lock.yaml` — which is what the next two options clean up.
 
