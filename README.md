@@ -119,11 +119,13 @@ GET http://127.0.0.1:<port>/api/completion-alert.diag
 | --- | --- |
 | Completion alert | Master switch. Off means no tone and no notice |
 | When to alert | `All sessions`: every session that finishes; `Background only`: stay quiet for the session you are looking at |
+| Everything while backgrounded | With `Background only` selected: once the app is hidden or minimised, nothing is really "on screen", so any session finishing alerts you. The row shows the current state and is disabled while `All sessions` is selected |
+| Announce stopped rounds too | Off by default: a round you ended with **Stop** raises no notice and no tone. Only rounds that finish on their own are announced |
 | Play the tone | Mutes the sound only; the notice still appears |
 | Volume | 0–100 %, applies to previews and alerts alike |
 | Tone | `‹ current ›` steps through the tones and previews each step; the downward arrow opens the full library. Clicking the name replays it |
 | All tones | Every built-in tone with a preview button per row, then a **Custom tone** row that picks a local file |
-| Custom tone | Choose an mp3 / wav / ogg, then trim it on its waveform and save |
+| Custom tone | Choose an mp3 / wav / ogg, then trim it on its waveform. **Preview slice** auditions exactly the range you selected, before anything is saved |
 
 Preferences live in this plugin's own settings namespace (`completion-alert`) inside the profile's settings document, so they survive a restart and reach every open window. On a client without the settings service the plugin still works and keeps its choices for the life of the page.
 
@@ -173,8 +175,25 @@ Three tones ship with the plugin. Two of them are **original additive synthesis*
 | Tone | Source | Notes |
 | --- | --- | --- |
 | 冰冰冰 (`bingbingbing`) | `assets/bingbingbing.ogg` | the meme tone, cut to one 1.06 s round, 12 642 bytes |
-| Crisp (`crisp-a`) | `assets/crisp-a.ogg`, synthesized | two ascending notes (F#6 -> F#7), the payment-confirmation shape, 0.50 s, 6 408 bytes |
-| Crisp short (`crisp-b`) | `assets/crisp-b.ogg`, synthesized | three ascending marimba notes (D4 -> A4 -> D5), the message-alert shape, 0.58 s, 6 901 bytes |
+| Crisp (`crisp-a`) | `assets/crisp-a.ogg`, synthesized | two ascending notes (F#6 -> F#7), the payment-confirmation shape, 0.50 s, 6 477 bytes |
+| Crisp short (`crisp-b`) | `assets/crisp-b.ogg`, synthesized | three ascending marimba notes (D4 -> A4 -> D5), the message-alert shape, 0.58 s, 7 068 bytes |
+| Hiss (`hiss`) | `assets/hiss.ogg`, synthesized | one short breathy hiss: band-passed noise with no pitch, a hard onset and a fast release, 0.70 s, 11 053 bytes |
+| Yikes (`yikes`) | `assets/yikes.ogg`, synthesized | a two-note descending whistle (A#4 -> D#4) with a breathy onset: surprise, 0.46 s, 8 457 bytes |
+
+### Adding a tone
+
+`tools/tones.json` is the only place a tone is declared:
+
+1. put an Ogg in `assets/`;
+2. add a row to `tools/tones.json` - `id`, `label`, `hint`, `source`, and `kind` (`synth` for
+   generated work, `recording` for third-party material, which NOTICE must then document);
+3. `powershell -NoProfile -ExecutionPolicy Bypass -File tools\embed-tones.ps1`;
+4. bump the version and reload the window.
+
+`lib/client.js` builds its library from `TONE_DEFINITIONS` in the generated block, so no code edit
+is needed, and both drift checks (`tools/check-embedded-tone.mjs` and the PowerShell `-Check`)
+read that same registry.
+
 
 The synthesiser is `tools/synthesize_tones.py`. Each note is a stack of decaying partials plus a very short band-limited noise burst at the onset (what makes a bell read as crisp), summed into a track with hand-placed onsets and mixed down. Two details are worth keeping if you edit it:
 

@@ -58,8 +58,32 @@ reference material is redistributed in this package or in this repository.
               fundamentals with the 3rd and 5th partials prominent and decaying
               faster than the fundamental, which is what the synthesiser models.
 
-Both are deliberately *not* transcriptions: the pitches, spacing and decay were
-chosen from the measurements and from musical judgement, and the timbre is
-synthesized from scratch. If you want the exact sound of a device you own, use
-the settings page's **custom tone** upload — that keeps the audio on your machine
-and out of any redistribution.
+`assets/hiss.ogg` and `assets/yikes.ogg` are original synthesis as well, and are
+not modelled on any particular recording:
+
+    hiss  - one short breathy hiss: band-passed noise with no pitch, a hard onset,
+            a slow swell and a fast release. Noise shaping, nothing sampled.
+    yikes - a two-note descending whistle (A#4 to D#4) with a breathy onset.
+
+None of the four is a transcription: the pitches, spacing and decay were chosen
+from measurements and from musical judgement, and every timbre is synthesized
+from scratch. If you want the exact sound of a device you own, or a clip of
+someone's voice, use the settings page's **custom tone** upload — that keeps the
+audio on your machine and out of any redistribution.
+
+Adding a tone that is third-party material
+------------------------------------------
+
+`tools/tones.json` marks each tone `synth` or `recording`. Anything you add as a
+`recording` — a character's voice, a sound effect from a film or a game, a clip
+lifted from a video — is third-party material, and putting it in a package you
+publish makes you the distributor of it. For those rows:
+
+  * record the origin and the rights holder in this file, next to the asset;
+  * keep the asset replaceable, like `bingbingbing` above, so a rights holder can
+    ask for a swap instead of a takedown;
+  * if the material is someone's voice or a commercial recording, prefer the
+    **custom tone** upload and leave it out of the package entirely.
+
+The plugin's own code, its tools and its four synthesized tones are MIT (see
+LICENSE); the `recording` tones are not.

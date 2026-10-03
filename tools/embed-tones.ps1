@@ -1,12 +1,18 @@
-# Embed every built-in tone into lib/client.js, in the marked block:
+# Embed every registered tone into lib/client.js, in the marked block:
 #
 #     //#region embedded-tones
+#     var TONE_DEFINITIONS = [ ... ];   // from tools/tones.json
 #     var TONE_SOURCES = { ... };
 #     var TONE_BASE64 = { ... };
 #     //#endregion embedded-tones
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tools\embed-tones.ps1
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tools\embed-tones.ps1 -Check
+#
+# The registry is tools/tones.json, and it is the single place a tone is
+# declared: adding one means dropping its Ogg into assets/, adding a row there
+# and re-running this script. lib/client.js builds its library from
+# TONE_DEFINITIONS, so no code edit is needed either.
 #
 # WHY INLINE, and not a sibling `tones-data.js` that the bundle requires:
 # the dsh client module loader resolves `require()` only for platform seed words
@@ -25,6 +31,7 @@
 [CmdletBinding()]
 param(
   [string]$AssetsDir,
+  [string]$RegistryPath,
   [string]$ClientPath,
   [switch]$Check
 )
@@ -32,37 +39,62 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 if (-not $AssetsDir) { $AssetsDir = Join-Path $root 'assets' }
+if (-not $RegistryPath) { $RegistryPath = Join-Path $root 'tools\tones.json' }
 if (-not $ClientPath) { $ClientPath = Join-Path $root 'lib\client.js' }
 
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 
-# id -> asset file name. Order is the order the settings list shows.
-$tones = [ordered]@{
-  'bingbingbing' = 'bingbingbing.ogg'
-  'crisp-a'      = 'crisp-a.ogg'
-  'crisp-b'      = 'crisp-b.ogg'
-}
+if (-not (Test-Path $RegistryPath)) { throw "tone registry not found: $RegistryPath" }
+$registry = [System.IO.File]::ReadAllText($RegistryPath, $utf8) | ConvertFrom-Json
+if (-not $registry.tones -or $registry.tones.Count -eq 0) { throw "the registry lists no tones: $RegistryPath" }
 
 $entries = @()
-foreach ($id in $tones.Keys) {
-  $file = Join-Path $AssetsDir $tones[$id]
-  if (-not (Test-Path $file)) { throw "tone asset not found: $file" }
+foreach ($tone in $registry.tones) {
+  foreach ($field in 'id', 'label', 'hint', 'source') {
+    if (-not $tone.$field) { throw "a registry row is missing '$field': $($tone | ConvertTo-Json -Compress)" }
+  }
+  $file = Join-Path $AssetsDir $tone.source
+  if (-not (Test-Path $file)) { throw "tone asset not found: $file (registered as '$($tone.id)')" }
   $bytes = [System.IO.File]::ReadAllBytes($file)
   if ($bytes.Length -lt 500) { throw "tone asset looks too small: $file ($($bytes.Length) bytes)" }
   $magic = [System.Text.Encoding]::ASCII.GetString($bytes[0..3])
   if ($magic -ne 'OggS') { throw "$file is not an Ogg stream (magic '$magic')" }
+  $kind = if ($tone.kind) { [string]$tone.kind } else { 'recording' }
+  if ($kind -ne 'synth' -and $kind -ne 'recording') { throw "tone '$($tone.id)' has an unknown kind '$kind'" }
   $entries += [pscustomobject]@{
-    id     = $id
-    source = $tones[$id]
+    id     = [string]$tone.id
+    label  = [string]$tone.label
+    hint   = [string]$tone.hint
+    source = [string]$tone.source
+    kind   = $kind
     bytes  = $bytes.Length
     base64 = [Convert]::ToBase64String($bytes)
   }
 }
 
+$duplicates = $entries | Group-Object id | Where-Object { $_.Count -gt 1 }
+if ($duplicates) { throw "duplicate tone id(s): $(($duplicates | ForEach-Object { $_.Name }) -join ', ')" }
+
 # ---- the generated block -----------------------------------------------------
+
+# ConvertTo-Json escapes non-ASCII, so the strings are emitted by hand.
+function Quote([string]$value) { '"' + ($value -replace '\\', '\\' -replace '"', '\"') + '"' }
 
 $block = @()
 $block += '    //#region embedded-tones'
+$block += '    /** The tone registry (tools/tones.json), baked in at build time. */'
+$block += '    var TONE_DEFINITIONS = ['
+foreach ($entry in $entries) {
+  $block += '      {'
+  $block += '        id: ' + (Quote $entry.id) + ','
+  $block += '        label: ' + (Quote $entry.label) + ','
+  $block += '        hint: ' + (Quote $entry.hint) + ','
+  $block += '        source: ' + (Quote $entry.source) + ','
+  $block += '        kind: ' + (Quote $entry.kind)
+  $block += '      },'
+}
+$block += '    ];'
+$block += ''
 $block += '    /** Tone id -> the asset file it was generated from (informational). */'
 $block += '    var TONE_SOURCES = {'
 foreach ($entry in $entries) { $block += "      '$($entry.id)': '$($entry.source)'," }
@@ -104,6 +136,7 @@ if ($Check) {
     # The payload is wrapped into 96-char chunks, so compare on a slice that
     # cannot straddle a wrap.
     if (-not $current.Contains($entry.base64.Substring(0, 90))) { $missing += $entry.id }
+    if (-not $current.Contains("label: " + (Quote $entry.label))) { $missing += "$($entry.id) (label)" }
   }
   if ($missing.Count -gt 0) {
     throw "the embedded tones are out of date for: $($missing -join ', ') - run tools\embed-tones.ps1"
@@ -120,6 +153,6 @@ if ($end -lt $lines.Count - 1) { $next += $lines[($end + 1)..($lines.Count - 1)]
 [System.IO.File]::WriteAllText($ClientPath, (($next -join "`n") + "`n"), $utf8)
 
 foreach ($entry in $entries) {
-  Write-Host ("  {0,-14} {1,8} bytes -> {2,8} base64 chars" -f $entry.id, $entry.bytes, $entry.base64.Length)
+  Write-Host ("  {0,-14} {1,-10} {2,8} bytes -> {3,8} base64 chars" -f $entry.id, $entry.kind, $entry.bytes, $entry.base64.Length)
 }
-Write-Host "embedded into $ClientPath"
+Write-Host "embedded $($entries.Count) tones into $ClientPath"

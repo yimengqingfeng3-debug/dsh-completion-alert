@@ -151,16 +151,88 @@ def bell_note(freq, duration, amplitude=1.0, decay=0.30):
 def place(track, signal, at_seconds):
     """Mix one note into the track at a sample offset."""
     begin = int(at_seconds * SR)
-    end = min(len(track), begin + len(signal))
+    end = min(len(track), begin + int(len(signal)))
     if begin >= len(track) or end <= begin:
         return track
     track[begin:end] += signal[: end - begin]
     return track
 
 
+def bandpass(signal, low, high):
+    """Zero-phase band pass, done in the frequency domain.
+
+    scipy is not a dependency of this project, and the tones are short, so an FFT
+    mask is simpler and has no phase distortion to worry about.
+    """
+    n = len(signal)
+    spectrum = np.fft.rfft(signal)
+    freqs = np.fft.rfftfreq(n, 1.0 / SR)
+    mask = np.ones_like(freqs)
+    # Soft edges (an octave wide) so the noise does not ring after masking.
+    below = freqs < low
+    mask[below] = np.clip((freqs[below] / low) ** 2, 0.0, 1.0)
+    above = freqs > high
+    mask[above] = np.clip((high / np.maximum(freqs[above], 1e-6)) ** 2, 0.0, 1.0)
+    return np.fft.irfft(spectrum * mask, n=n)
+
+
 # ---------------------------------------------------------------------------
 # The tones
 # ---------------------------------------------------------------------------
+
+def hiss():
+    """A sharp breathy hiss — the shape a startled cat makes.
+
+    Nothing pitched: a hiss is broadband noise with a formant-like emphasis
+    around 3-6 kHz, a hard onset, a slow swell and a fast release. Synthesized
+    from white noise, so there is no recording behind it.
+    """
+    duration = 0.70
+    n = int(SR * duration)
+    t = np.arange(n) / SR
+    rng = np.random.default_rng(20261003)
+
+    noise = bandpass(rng.standard_normal(n), 1400.0, 7200.0)
+    # A second, higher band gives the "spray" of the exhale.
+    spray = bandpass(rng.standard_normal(n), 6000.0, 12000.0)
+
+    # Envelope: 12 ms attack, a body that swells slightly, then a quick fall.
+    attack = np.clip(t / 0.012, 0.0, 1.0)
+    swell = 0.72 + 0.28 * np.sin(np.pi * np.clip(t / 0.42, 0.0, 1.0))
+    release = np.where(t < 0.42, 1.0, np.clip((duration - t) / (duration - 0.42), 0.0, 1.0) ** 1.6)
+    envelope = attack * swell * release
+
+    # A slow amplitude wobble: breath is not a steady stream.
+    wobble = 1.0 + 0.12 * np.sin(2 * np.pi * 11.0 * t + 0.7)
+    # A faint low growl under the noise, for the throat, not the mouth.
+    growl = 0.10 * np.sin(2 * np.pi * 190.0 * t) * np.exp(-t / 0.18)
+
+    out = (noise * envelope * wobble) + (0.35 * spray * envelope) + growl
+    out = one_pole_highpass(out, 700.0)
+    out = one_pole_lowpass(out, 13000.0)
+    return fade(trim_tail(normalize(out, 0.62)))
+
+
+def yikes():
+    """A two-note descending whistle — surprise, original composition.
+
+    Deliberately not an impression of any particular recording: a clean fall
+    from a bright note to its lower fifth, breathy onset, short. Synthesized.
+    """
+    track = np.zeros(int(SR * 0.46))
+    upper = 466.16   # A#4
+    lower = 311.13   # D#4
+    place(track, bell_note(upper, 0.20, amplitude=0.92, decay=0.10), 0.0)
+    place(track, bell_note(lower, 0.34, amplitude=1.00, decay=0.19), 0.145)
+    # A breathy edge, so it reads as a voice-ish exclamation rather than a bell.
+    rng = np.random.default_rng(7717)
+    breath = bandpass(rng.standard_normal(len(track)), 1800.0, 6000.0)
+    shape = np.exp(-np.arange(len(track)) / SR / 0.09)
+    track = track + 0.10 * breath * shape
+    track = one_pole_highpass(track, 260.0)
+    track = one_pole_lowpass(track, 9000.0)
+    return fade(trim_tail(normalize(track, 0.74)))
+
 
 def payment_chime():
     """Two ascending notes an octave apart — the payment confirmation shape.
@@ -202,6 +274,8 @@ def message_tone():
 TONES = {
     "crisp-a": payment_chime,
     "crisp-b": message_tone,
+    "hiss": hiss,
+    "yikes": yikes,
 }
 
 

@@ -1,0 +1,39 @@
+{
+  "tones": [
+    {
+      "id": "bingbingbing",
+      "label": "冰冰冰",
+      "hint": "梗音效：三连音「冰·冰·冰」",
+      "source": "bingbingbing.ogg",
+      "kind": "recording"
+    },
+    {
+      "id": "crisp-a",
+      "label": "清脆提示",
+      "hint": "两音上行「叮—叮」，付款确认那种干脆感",
+      "source": "crisp-a.ogg",
+      "kind": "synth"
+    },
+    {
+      "id": "crisp-b",
+      "label": "清脆短音",
+      "hint": "三音上行马林巴「咚·哒·铃」，短信提示那种",
+      "source": "crisp-b.ogg",
+      "kind": "synth"
+    },
+    {
+      "id": "hiss",
+      "label": "哈气",
+      "hint": "短促的一声「嘶——」，带气声的警觉感",
+      "source": "hiss.ogg",
+      "kind": "synth"
+    },
+    {
+      "id": "yikes",
+      "label": "哎呀我去",
+      "hint": "两音下行短哨「哟↘」，惊讶那一下",
+      "source": "yikes.ogg",
+      "kind": "synth"
+    }
+  ]
+}

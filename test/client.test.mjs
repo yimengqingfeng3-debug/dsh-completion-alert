@@ -122,6 +122,16 @@ function installBrowser() {
   };
 
   const document = makeDocument();
+  /**
+   * `document.visibilityState`, writable so a test can simulate the window being
+   * hidden or minimised - the signal the background rule reads.
+   */
+  Object.defineProperty(document, "visibilityState", {
+    value: "visible",
+    writable: true,
+    configurable: true,
+    enumerable: true
+  });
   // In a browser window === globalThis, and the plugin reads `window.AudioContext`
   // (the standard placement). Point the test's window at its own globalThis so a
   // fake AudioContext installed for one test is the one the plugin finds; the
@@ -138,8 +148,20 @@ function installBrowser() {
     color: "rgb(20, 20, 20)"
   }));
   const posts = [];
+  /**
+   * What the host's turn-outcome route answers. `undefined` models a host that
+   * cannot answer at all (no route), which the client must tolerate.
+   */
+  const outcome = { kind: undefined };
   setGlobal("fetch", (url, options) => {
     posts.push({ url: String(url), options });
+    if (String(url).startsWith("/api/completion-alert.outcome")) {
+      if (outcome.kind === undefined) return Promise.resolve({ ok: false, json: () => Promise.resolve({}) });
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ kind: outcome.kind, cause: "", turn: 1, at: Date.now() })
+      });
+    }
     return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
   });
   setGlobal("requestAnimationFrame", (callback) => setTimeout(callback, 0));
@@ -150,6 +172,9 @@ function installBrowser() {
   return {
     document,
     posts,
+    setOutcome(kind) {
+      outcome.kind = kind;
+    },
     teardown() {
       for (const key of keys) {
         if (previous[key] === undefined) {
@@ -775,6 +800,8 @@ test("a finished round queues a notice titled by its session", async () => {
     });
     setRunning(world.status, "s1", true);
     setRunning(world.status, "s1", false);
+    // The notice is raised after the host answers how the turn ended.
+    await settle();
     const items = world.props.store.getSnapshot();
     assert.equal(items.length, 1);
     assert.equal(items[0].sessionId, "s1");
@@ -816,9 +843,11 @@ test("scope=background keeps the session on screen quiet but reports the others"
     world.sectionProps.runtime.update({ alertScope: "background" });
     setRunning(world.status, "viewed", true);
     setRunning(world.status, "viewed", false);
+    await settle();
     assert.equal(world.props.store.getSnapshot().length, 0, "the visible session must stay quiet");
     setRunning(world.status, "other", true);
     setRunning(world.status, "other", false);
+    await settle();
     const items = world.props.store.getSnapshot();
     assert.equal(items.length, 1);
     assert.equal(items[0].sessionId, "other");
@@ -873,6 +902,130 @@ test("a client without settingsScope still mounts everything", async () => {
     assert.ok(world.section, "the settings page still renders with local defaults");
     assert.equal(world.sectionProps.runtime.settings.getSnapshot().enabled, true);
   } finally {
+    world.browser.teardown();
+  }
+});
+
+test("a hand-stopped round raises no notice, and the switch can allow it", async () => {
+  const world = await bootRuntime();
+  try {
+    world.sessions.set({
+      phase: "ready",
+      ids: ["s1"],
+      byId: { s1: { id: "s1", displayTitle: "被停掉的", retainedBy: { mainView: 1 } } }
+    });
+    // The host answers with the agent's own turn/end reason.
+    world.browser.setOutcome("aborted");
+
+    setRunning(world.status, "s1", true);
+    setRunning(world.status, "s1", false);
+    await settle();
+    assert.equal(world.props.store.getSnapshot().length, 0, "a stopped round must stay quiet");
+
+    // Turning the option on announces it anyway, as a deliberate choice.
+    world.sectionProps.runtime.update({ alertOnStop: true });
+    setRunning(world.status, "s1", true);
+    setRunning(world.status, "s1", false);
+    await settle();
+    assert.equal(world.props.store.getSnapshot().length, 1, "with the switch on it is announced");
+
+    // A normal completion is announced with the switch off as well.
+    world.sectionProps.runtime.update({ alertOnStop: false });
+    world.browser.setOutcome("completed");
+    setRunning(world.status, "s1", true);
+    setRunning(world.status, "s1", false);
+    await settle();
+    assert.equal(world.props.store.getSnapshot().length, 2, "a completed round is still announced");
+  } finally {
+    world.browser.teardown();
+  }
+});
+
+test("a host that cannot answer still announces completions", async () => {
+  const world = await bootRuntime();
+  try {
+    world.sessions.set({
+      phase: "ready",
+      ids: ["s1"],
+      byId: { s1: { id: "s1", displayTitle: "未知结局", retainedBy: { mainView: 1 } } }
+    });
+    // No outcome route: the fetch resolves to nothing usable.
+    world.browser.setOutcome(undefined);
+    setRunning(world.status, "s1", true);
+    setRunning(world.status, "s1", false);
+    await settle();
+    assert.equal(world.props.store.getSnapshot().length, 1, "an unknown outcome must not swallow the notice");
+  } finally {
+    world.browser.teardown();
+  }
+});
+
+test("a backgrounded window announces the session on screen", async () => {
+  const world = await bootRuntime();
+  try {
+    world.sessions.set({
+      phase: "ready",
+      ids: ["viewed"],
+      byId: { viewed: { id: "viewed", displayTitle: "正在看的", retainedBy: { mainView: 1 } } }
+    });
+    world.sectionProps.runtime.update({ alertScope: "background" });
+    world.browser.setOutcome("completed");
+
+    // In the foreground the scope still silences the session on screen.
+    setRunning(world.status, "viewed", true);
+    setRunning(world.status, "viewed", false);
+    await settle();
+    assert.equal(world.props.store.getSnapshot().length, 0, "foreground keeps the scope rule");
+
+    // Hidden: the same round must be announced.
+    globalThis.document.visibilityState = "hidden";
+    world.sectionProps.runtime.background.refresh();
+    assert.equal(world.sectionProps.runtime.background.getSnapshot(), true, "the store reports the background");
+    setRunning(world.status, "viewed", true);
+    setRunning(world.status, "viewed", false);
+    await settle();
+    assert.equal(world.props.store.getSnapshot().length, 1, "backgrounded, everything is announced");
+
+    // The option is off: the scope rule applies again.
+    world.sectionProps.runtime.update({ alertInBackground: false });
+    setRunning(world.status, "viewed", true);
+    setRunning(world.status, "viewed", false);
+    await settle();
+    assert.equal(world.props.store.getSnapshot().length, 1, "with the option off the scope wins");
+
+    globalThis.document.visibilityState = "visible";
+    world.sectionProps.runtime.background.refresh();
+    assert.equal(world.sectionProps.runtime.background.getSnapshot(), false, "and back to the foreground");
+  } finally {
+    globalThis.document.visibilityState = "visible";
+    world.browser.teardown();
+  }
+});
+
+test("background state falls back to focus, and defaults to the foreground", async () => {
+  const world = await bootRuntime();
+  try {
+    // A shell that reports no visibility: focus decides.
+    const savedVisibility = globalThis.document.visibilityState;
+    globalThis.document.visibilityState = undefined;
+    const savedHasFocus = globalThis.document.hasFocus;
+    globalThis.document.hasFocus = () => false;
+    world.sectionProps.runtime.background.refresh();
+    assert.equal(world.sectionProps.runtime.background.getSnapshot(), true, "an unfocused window is background");
+
+    globalThis.document.hasFocus = () => true;
+    world.sectionProps.runtime.background.refresh();
+    assert.equal(world.sectionProps.runtime.background.getSnapshot(), false, "a focused window is foreground");
+
+    // Neither readable: the strictest reading wins.
+    globalThis.document.hasFocus = undefined;
+    world.sectionProps.runtime.background.refresh();
+    assert.equal(world.sectionProps.runtime.background.getSnapshot(), false, "an unreadable shell counts as foreground");
+
+    globalThis.document.visibilityState = savedVisibility;
+    globalThis.document.hasFocus = savedHasFocus;
+  } finally {
+    globalThis.document.visibilityState = "visible";
     world.browser.teardown();
   }
 });

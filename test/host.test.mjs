@@ -9,8 +9,11 @@ import plugin, {
   CompletionAlertSettings,
   Config,
   DIAG_PATH,
+  OUTCOME_PATH,
   apply,
   applyDiagnostics,
+  applyTurnOutcomes,
+  describeTurnEnd,
   inject,
   name
 } from "../lib/index.js";
@@ -23,8 +26,16 @@ function fakeContext({ withConnection = true, withSettings = true } = {}) {
   const injected = [];
   const routes = [];
   const registrations = [];
+  /** event name -> listeners, for the turn-outcome listener. */
+  const listeners = new Map();
   const ctx = {
     logger: { warn: (message) => warnings.push(String(message)), info: () => {} },
+    on: (event, listener) => {
+      const bucket = listeners.get(event) ?? [];
+      bucket.push(listener);
+      listeners.set(event, bucket);
+      return () => {};
+    },
     effect: (factory, label) => {
       effects.push({ factory, label });
       // Like the real client, the factory runs immediately and its return value
@@ -60,7 +71,20 @@ function fakeContext({ withConnection = true, withSettings = true } = {}) {
       callback(scope);
     }
   };
-  return { ctx, effects, provided, warnings, injected, routes, registrations };
+  return {
+    ctx,
+    effects,
+    provided,
+    warnings,
+    injected,
+    routes,
+    registrations,
+    listeners,
+    /** Fire one session event the way the app's agent runtime does. */
+    emit(event, session, payload) {
+      for (const listener of listeners.get(event) ?? []) listener(session, payload);
+    }
+  };
 }
 
 /** Decode one schema's defaults by validating an empty object. */
@@ -143,10 +167,50 @@ test("every declared field validates on its own", () => {
 test("apply registers the diagnostics route and tolerates a settings service", () => {
   const { ctx, routes, registrations, warnings } = fakeContext();
   apply(ctx);
-  assert.equal(routes.length, 1, "the diagnostics route is the host half's one surface");
-  assert.equal(routes[0].path, DIAG_PATH);
-  assert.deepEqual(routes[0].methods, ["GET", "POST"]);
+  assert.equal(routes.length, 2, "the host half serves the report and the turn outcome");
+  const diag = routes.find((route) => route.path === DIAG_PATH);
+  const outcome = routes.find((route) => route.path === OUTCOME_PATH);
+  assert.ok(diag, "the diagnostics route is registered");
+  assert.deepEqual(diag.methods, ["GET", "POST"]);
+  assert.ok(outcome, "the turn-outcome route is registered");
+  assert.deepEqual(outcome.methods, ["GET"]);
   assert.equal(registrations.length + warnings.length >= 1, true);
+});
+
+test("the turn-outcome route reports how the newest turn ended", async () => {
+  const { ctx, routes, emit } = fakeContext();
+  apply(ctx);
+  const route = routes.find((row) => row.path === OUTCOME_PATH);
+  const ask = (sessionId) =>
+    route.fetch({ method: "GET", url: `http://localhost${OUTCOME_PATH}?sessionId=${sessionId}` })
+      .then((response) => response.json());
+
+  // Nothing recorded yet: the browser half must get "unknown", not a guess.
+  assert.deepEqual(await ask("s1"), { kind: null, cause: "", turn: null, at: null });
+
+  emit("session/event", { header: { id: "s1" } }, { type: "turn/end", data: { turn: 3, reason: { kind: "completed" } } });
+  assert.equal((await ask("s1")).kind, "completed");
+
+  // A user hitting Stop: this is the case the plugin used to announce anyway.
+  emit("session/event", { header: { id: "s1" } }, {
+    type: "turn/end",
+    data: { turn: 4, reason: { kind: "aborted", reason: { kind: "user" } } }
+  });
+  const stopped = await ask("s1");
+  assert.equal(stopped.kind, "aborted");
+  assert.equal(stopped.cause, "user");
+  assert.equal(stopped.turn, 4);
+
+  // Events that are not a turn end are ignored.
+  emit("session/event", { header: { id: "s1" } }, { type: "assistant/message", data: {} });
+  assert.equal((await ask("s1")).kind, "aborted");
+
+  // Another session is unaffected.
+  assert.equal((await ask("s2")).kind, null);
+
+  // An unknown reason still records, so the browser half can decide.
+  emit("session/event", { header: { id: "s3" } }, { type: "turn/end", data: { turn: 1, reason: { kind: "interrupted" } } });
+  assert.equal((await ask("s3")).kind, "interrupted");
 });
 
 test("apply on a composition without settings or connection still succeeds", () => {
