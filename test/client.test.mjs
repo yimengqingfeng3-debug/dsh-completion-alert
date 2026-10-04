@@ -1255,32 +1255,62 @@ test("a stored document is read back on boot, even though the transport looks wr
   }
 });
 
-test("a tone added from a file becomes a row of its own in the library", async () => {
+test("confirming a trimmed clip adds it to the library as its own entry", async () => {
   const world = await bootRuntime();
   try {
     const module = world.module;
-    // A stored user tone must survive normalization, keep its payload, and be
-    // selectable by id - which is what makes it a library row rather than an
-    // occupant of the single custom slot.
     const data = "data:audio/wav;base64,UklGRg==";
-    const normalized = module.sanitizeSettings({
-      toneId: "user:abc",
-      tones: [{ id: "user:abc", label: "牛来喊妈妈", data, range: { start: 0, end: 1.2 } }]
+    const before = module.sanitizeSettings({ toneId: "crisp-a", tones: [] });
+
+    // This is exactly what the trim dialog's confirm button runs.
+    const added = module.planAddedTone(before, null, {
+      id: "user:abc",
+      label: "\u725b\u6765\u558a\u5988\u5988",
+      data,
+      range: { start: 0, end: 1.2 }
     });
-    assert.equal(normalized.tones.length, 1);
-    assert.equal(normalized.toneId, "user:abc", "the added tone is the selected one");
-    assert.equal(normalized.tones[0].label, "牛来喊妈妈");
-    assert.equal(normalized.tones[0].data, data);
-    assert.equal(normalized.tones[0].range.start, 0);
-    assert.equal(normalized.tones[0].range.end, 1.2);
 
-    // A tone whose payload is gone must not be selected, or the alert goes silent.
-    const orphaned = module.sanitizeSettings({ toneId: "user:gone", tones: [] });
-    assert.equal(orphaned.toneId, module.DEFAULT_TONE_ID, "a missing payload falls back");
+    assert.equal(added.replaced, false, "a new clip is added, not a replacement");
+    assert.equal(added.toneId, "user:abc", "the added clip becomes the selected tone");
+    assert.deepEqual(added.patch.toneId, "user:abc");
+    assert.equal(added.patch.tones.length, 1, "it joins the list");
+    assert.equal(added.patch.tones[0].label, "\u725b\u6765\u558a\u5988\u5988");
+    assert.equal(added.patch.tones[0].data, data);
 
-    // Junk in the list is dropped rather than trusted.
+    // The store must accept the patch, and the clip must survive normalization -
+    // which is what makes it a row rather than an occupant of the custom slot.
+    world.sectionProps.runtime.update(added.patch);
+    const settings = world.sectionProps.runtime.settings.getSnapshot();
+    assert.equal(settings.tones.length, 1);
+    assert.equal(settings.toneId, "user:abc");
+    assert.equal(settings.customData, "", "the legacy custom slot stays untouched");
+
+    // A second clip joins alongside the first rather than replacing it.
+    const second = module.planAddedTone(settings, null, {
+      id: "user:def",
+      label: "second",
+      data,
+      range: null
+    });
+    assert.equal(second.patch.tones.length, 2, "clips accumulate");
+
+    // Re-trimming an existing entry replaces only its slice.
+    const retrimmed = module.planAddedTone(settings, "user:abc", {
+      id: "user:ignored",
+      label: "renamed",
+      data,
+      range: { start: 0, end: 0.5 }
+    });
+    assert.equal(retrimmed.replaced, true);
+    assert.equal(retrimmed.patch.tones.length, 1, "no second entry is created");
+    assert.equal(retrimmed.patch.tones[0].id, "user:abc", "it keeps its place and id");
+    assert.equal(retrimmed.patch.tones[0].label, "renamed");
+
+    // Junk is refused rather than trusted.
     const junk = module.sanitizeSettings({ tones: [{ id: "nope", label: "x", data }] });
     assert.equal(junk.tones.length, 0, "an id without the user prefix is refused");
+    const orphaned = module.sanitizeSettings({ toneId: "user:gone", tones: [] });
+    assert.equal(orphaned.toneId, module.DEFAULT_TONE_ID, "a missing payload falls back");
   } finally {
     world.browser.teardown();
   }

@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.8.2
+
+**The confirm step now says what it does, and the behaviour behind it is tested
+directly.**
+
+The decision a confirmation makes - a clip joins All tones as its own entry and
+becomes the selected tone - lived inside the component, where only a driven React
+tree could reach it, so it was asserted at the data layer instead. It is now a
+module function (`planAddedTone`) that the component calls, and the test drives
+that same function: a first clip joins the list, a second accumulates beside it,
+re-trimming replaces only the slice while keeping the entry's place and id, and
+the legacy custom slot is left untouched.
+
+The wording was the other half of the problem: the trim dialog's button said
+"Save and use" (保存并使用) and the row below the list said "Custom tone"
+(自定义音效), neither of which says that confirming puts the clip in the list
+above. They now read "Add to All tones" (加入全部音效) and "Add a tone (choose a
+file)", and the trim hint says where the clip goes.
+
 ## 1.8.1
 
 **A repeat was cancelled by its own playback ending.** Measured live, with the
