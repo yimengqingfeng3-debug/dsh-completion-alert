@@ -10,18 +10,19 @@
     "./package.json": "./package.json"
   },
   "files": [
-    "lib",
-    "assets",
-    "tools",
-    "cordis.patch.yml",
-    "install.ps1",
-    "mount-as-bundle.ps1",
-    "uninstall-all.ps1",
-    "README.md",
-    "README.zh-CN.md",
     "CHANGELOG.md",
     "LICENSE",
-    "NOTICE"
+    "NOTICE",
+    "README.md",
+    "README.zh-CN.md",
+    "assets",
+    "cordis.patch.yml",
+    "install.ps1",
+    "lib",
+    "mount-as-bundle.ps1",
+    "tools",
+    "tools/check-client-bundle.mjs",
+    "uninstall-all.ps1"
   ],
   "keywords": [
     "dsh",
@@ -49,9 +50,10 @@
   },
   "scripts": {
     "prepublishOnly": "node tools/check-no-local-tones.mjs",
-    "test": "node --import ./test/loader.mjs --test test/host.test.mjs test/client.test.mjs",
+    "test": "node tools/check-client-bundle.mjs && node --import ./test/loader.mjs --test test/host.test.mjs test/client.test.mjs",
     "pack": "npm pack --pack-destination dist",
-    "embed-audio": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/embed-audio.ps1"
+    "embed-audio": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/embed-audio.ps1",
+    "check:bundle": "node tools/check-client-bundle.mjs"
   },
   "dsh": {
     "pluginType": "client",
