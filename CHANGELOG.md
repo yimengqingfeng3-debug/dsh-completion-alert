@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.8.3
+
+**The old "Custom tone" row is gone, and the clip it held becomes an ordinary
+library entry.**
+
+That row was the last piece of the single-slot design this feature replaced, and
+it stayed on screen holding whatever an earlier version had stored - so the list
+showed one tone in the library and another in a slot below it, and the add row
+carried a file name that was not its own.
+
+The clip is now migrated into the list on load: it gets its own entry with its own
+name (or "自定义音效" when the old document had none), its saved trim range comes
+with it, and the selection follows it if it was the selected tone. The slot is
+emptied as part of the same step, so the migration is idempotent, and every
+reading path goes through the same function - the boot read, a live document from
+the transport, and the plugin's own store.
+
+The library is now exactly two things: the tones you can pick, and an add row.
+
 ## 1.8.2
 
 **The confirm step now says what it does, and the behaviour behind it is tested

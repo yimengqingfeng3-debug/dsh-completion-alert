@@ -647,9 +647,46 @@ test("a 1.0.x document migrates onto the tone fields", async () => {
     const legacyBuiltin = module.normalizeSettings({ soundSource: "builtin", soundData: "" });
     assert.equal(legacyBuiltin.toneId, module.DEFAULT_TONE_ID);
     const legacyCustom = module.normalizeSettings({ soundSource: "custom", soundData: "data:audio/wav;base64,AAAA", soundName: "old.wav" });
-    assert.equal(legacyCustom.toneId, module.CUSTOM_TONE_ID);
-    assert.equal(legacyCustom.customData, "data:audio/wav;base64,AAAA");
-    assert.equal(legacyCustom.customName, "old.wav");
+    // The single custom slot is gone: an older document's clip becomes a library
+    // entry of its own, and the selection follows it.
+    assert.equal(legacyCustom.tones.length, 1, "the clip joins the library");
+    assert.equal(legacyCustom.tones[0].label, "old.wav");
+    assert.equal(legacyCustom.tones[0].data, "data:audio/wav;base64,AAAA");
+    assert.equal(legacyCustom.toneId, legacyCustom.tones[0].id, "the migrated clip is the selected tone");
+    assert.equal(legacyCustom.customData, "", "the slot keeps no second copy");
+    assert.equal(legacyCustom.customName, "");
+  } finally {
+    browser.teardown();
+  }
+});
+
+test("a clip left in the old custom slot is migrated once, and stays selected", async () => {
+  const { module, browser } = await boot();
+  try {
+    const before = {
+      toneId: "custom",
+      customData: "data:audio/wav;base64,AAAA",
+      customName: "Tri-tone.m4a",
+      customRange: { start: 0, end: 0.75 },
+      tones: [{ id: "user:kept", label: "kept", data: "data:audio/wav;base64,BBBB", range: null }]
+    };
+    const once = module.normalizeSettings(before);
+    assert.equal(once.tones.length, 2, "the migrated clip joins the one already there");
+    assert.equal(once.tones[1].label, "Tri-tone.m4a");
+    assert.equal(once.tones[1].range.start, 0);
+    assert.equal(once.tones[1].range.end, 0.75);
+    assert.equal(once.toneId, once.tones[1].id, "the migrated clip is selected");
+    assert.equal(once.customData, "", "nothing is left in the slot");
+
+    // Reading the migrated document again must not migrate a second time.
+    const twice = module.normalizeSettings(once);
+    assert.equal(twice.tones.length, 2, "migration is idempotent");
+    assert.equal(twice.toneId, once.toneId, "the selection is unchanged");
+
+    // A document that was already using a built-in keeps its choice.
+    const chosenBuiltin = module.normalizeSettings({ ...before, toneId: "crisp-b" });
+    assert.equal(chosenBuiltin.toneId, "crisp-b", "an explicit built-in choice wins over the migrated clip");
+    assert.equal(chosenBuiltin.tones.length, 2);
   } finally {
     browser.teardown();
   }
