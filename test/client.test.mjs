@@ -110,6 +110,13 @@ function installBrowser() {
   const previous = {};
   const keys = ["window", "document", "fetch", "atob", "getComputedStyle", "navigator", "AudioContext", "matchMedia", "FileReader", "requestAnimationFrame"];
   for (const key of keys) previous[key] = globalThis[key];
+  /**
+   * What the plugin's own settings store holds, as the Host would keep it.
+   *
+   * Declared here rather than inside `installBrowser`, because the fake context
+   * below hands it to the tests as well.
+   */
+  const settingsStore = { document: null, reads: 0, writes: [] };
 
   // `navigator` and friends are accessor-only on modern Node, so a plain
   // assignment throws: define the value instead.
@@ -155,6 +162,28 @@ function installBrowser() {
   const outcome = { kind: undefined, answerAfter: 0, asked: 0 };
   setGlobal("fetch", (url, options) => {
     posts.push({ url: String(url), options });
+    if (String(url).startsWith("/api/completion-alert.settings")) {
+      const method = options?.method ?? "GET";
+      if (method === "GET") {
+        settingsStore.reads += 1;
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({
+            settings: settingsStore.document,
+            at: Date.now(),
+            stored: settingsStore.document !== null
+          })
+        });
+      }
+      try {
+        settingsStore.document = JSON.parse(options.body).settings;
+        settingsStore.writes.push(settingsStore.document);
+      } catch {
+        return Promise.resolve({ ok: false, status: 400, json: () => Promise.resolve({ ok: false }) });
+      }
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }) });
+    }
     if (String(url).startsWith("/api/completion-alert.outcome")) {
       outcome.asked += 1;
       // `answerAfter` models the Host appending `turn/end` a moment after the
@@ -182,6 +211,7 @@ function installBrowser() {
   return {
     document,
     posts,
+    settingsStore,
     setOutcome(kind) {
       outcome.kind = kind;
       outcome.asked = 0;
@@ -472,6 +502,9 @@ function setRunning(store, sessionId, running) {
 async function boot(options = {}) {
   const react = makeReact();
   const { module, browser, context } = loadBundle({ react });
+  // A reload starts with the plugin's own store already holding a document, so
+  // `storeDocument` seeds it before the bundle boots.
+  if (options.storeDocument !== undefined) browser.settingsStore.document = options.storeDocument;
   const world = makeContext(options);
   module.apply(world.ctx);
   // `context` is the vm sandbox the bundle runs in: audio tests install their
@@ -1201,6 +1234,54 @@ test("background state falls back to focus, and defaults to the foreground", asy
     globalThis.document.hasFocus = savedHasFocus;
   } finally {
     globalThis.document.visibilityState = "visible";
+    world.browser.teardown();
+  }
+});
+
+test("a stored document is read back on boot, even though the transport looks writable", async () => {
+  // What the running app actually reports: a form that claims to be writable
+  // while refusing every write, and a store that holds the real choice. The
+  // document is seeded before the boot, as a reload would find it.
+  const world = await bootRuntime({ storeDocument: { repeat: 2, volume: 0.42, toneId: "crisp-b" } });
+  try {
+    // The boot read is asynchronous, so wait for it rather than for a fixed delay.
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    const settings = world.sectionProps.runtime.settings.getSnapshot();
+    assert.equal(settings.repeat, 2, "the stored repeat count is used");
+    assert.equal(settings.volume, 0.42, "the stored volume is used");
+    assert.equal(settings.toneId, "crisp-b", "the stored tone is used");
+  } finally {
+    world.browser.teardown();
+  }
+});
+
+test("a tone added from a file becomes a row of its own in the library", async () => {
+  const world = await bootRuntime();
+  try {
+    const module = world.module;
+    // A stored user tone must survive normalization, keep its payload, and be
+    // selectable by id - which is what makes it a library row rather than an
+    // occupant of the single custom slot.
+    const data = "data:audio/wav;base64,UklGRg==";
+    const normalized = module.sanitizeSettings({
+      toneId: "user:abc",
+      tones: [{ id: "user:abc", label: "牛来喊妈妈", data, range: { start: 0, end: 1.2 } }]
+    });
+    assert.equal(normalized.tones.length, 1);
+    assert.equal(normalized.toneId, "user:abc", "the added tone is the selected one");
+    assert.equal(normalized.tones[0].label, "牛来喊妈妈");
+    assert.equal(normalized.tones[0].data, data);
+    assert.equal(normalized.tones[0].range.start, 0);
+    assert.equal(normalized.tones[0].range.end, 1.2);
+
+    // A tone whose payload is gone must not be selected, or the alert goes silent.
+    const orphaned = module.sanitizeSettings({ toneId: "user:gone", tones: [] });
+    assert.equal(orphaned.toneId, module.DEFAULT_TONE_ID, "a missing payload falls back");
+
+    // Junk in the list is dropped rather than trusted.
+    const junk = module.sanitizeSettings({ tones: [{ id: "nope", label: "x", data }] });
+    assert.equal(junk.tones.length, 0, "an id without the user prefix is refused");
+  } finally {
     world.browser.teardown();
   }
 });

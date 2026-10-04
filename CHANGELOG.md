@@ -1,5 +1,43 @@
 # Changelog
 
+## 1.8.0
+
+**A tone you add is now a tone in the library, the repeat count and the custom
+tone survive a reload, and the whole interface no longer goes blank.**
+
+### Adding a tone makes a library row
+
+Trimming a clip used to overwrite the single "custom" slot, so the second file
+replaced the first. A confirmed clip now joins **All tones** as its own entry,
+with its own name, its own preview, a rename button and a remove button. Several
+clips can live side by side, the one in use is marked, and removing the one in use
+falls back to the default instead of leaving the alert pointed at a payload that
+is gone. Re-trimming an added tone keeps its place and replaces only its slice.
+
+### Why a reload forgot everything
+
+Three separate faults, all in the same path:
+
+* The settings transport reports `mode: "host", writable: true` and then refuses
+  every write (`accepted: false` measured on every field). The read-back was
+  therefore skipped, because the form looked writable - the store is now always
+  consulted, and the form only seeds a document that does not exist yet.
+* The write that syncs the form ran *before* the store had answered, and sent the
+  shipped defaults over the stored document. Writes now wait for the store.
+* The three places that called the store fallback had been wired by a script whose
+  text anchors silently failed to match, so the fallback never ran at all. All
+  three call it now, and both directions are covered by tests.
+
+### The blank window
+
+`var leaving = useLeaving(props.onClose).leave;` bound only half of what the hook
+returns, and the render then read `leaving` - a `ReferenceError` inside a render
+pass, which unmounts the whole React tree. Opening the tone library blanked the
+interface. Fixed in all three dialogs.
+
+61 tests, including a stored document being read back on boot, and an added tone
+staying a library entry of its own.
+
 ## 1.7.1
 
 **The route that answers "how did that turn end" refused every request with a
