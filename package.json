@@ -1,6 +1,6 @@
 {
   "name": "dsh-completion-alert",
-  "version": "1.8.0",
+  "version": "1.8.1",
   "description": "DSH 工作完成提示：一轮工作结束播放「冰冰冰」提示音，并在右下角弹出可点击跳转的通知条；声音、音量、提示范围与自定义音源都在设置页里",
   "type": "module",
   "main": "lib/index.js",

@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.8.1
+
+**A repeat was cancelled by its own playback ending.** Measured live, with the
+plugin reporting each attempt:
+
+```
+repeatPlay:   { attempt: 1, of: 2, started: true, sliceSeconds: 0.747 }
+repeatSkipped:{ attempt: 2, reason: "the source was replaced" }
+```
+
+The second playback was due 0.93 s after the first, and the first playback's own
+end cleared the player's `sourceNode` at 0.75 s. The repeat decision read that as
+"a newer source has taken over" and skipped itself, so a two-repeat alert was
+heard as one.
+
+Two things were wrong, and both are fixed:
+
+* A pending repeat now compares a **generation counter**, which only `stop()` or a
+  newer playback increments. A source ending on its own no longer counts as being
+  superseded.
+* The stop-guard clears only the node it was armed for. It used to null whatever
+  was current, so a finished round's guard could wipe out the next round's
+  playback moments before its repeat was due.
+
+Both are covered by tests, and each was confirmed to fail against the behaviour
+it fixes - the generation test fails with "the second playback still happens".
+
 ## 1.8.0
 
 **A tone you add is now a tone in the library, the repeat count and the custom

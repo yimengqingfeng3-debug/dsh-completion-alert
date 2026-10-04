@@ -1307,6 +1307,55 @@ test("the repeat setting plays the tone that many times", async () => {
   }
 });
 
+test("a finished round's stop-guard does not cancel the next round's repeats", async () => {
+  const { module, browser, context } = await boot();
+  const audio = installFakeAudio(context, { startRunning: true, duration: 0.747 });
+  try {
+    const alert = module.createAlert({ report: () => {} });
+    alert.configure({ ...module.DEFAULT_SETTINGS, repeat: 2, toneId: "crisp-a" });
+
+    // Round one: its guard outlives the playback, because it covers every repeat.
+    alert.previewTone("crisp-a", null);
+    await alert.settled();
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    assert.equal(audio.log.starts.length, 2, "round one played both repeats");
+
+    // Round two starts while round one's guard is still pending (0.93 s into a
+    // guard that expires at 1.65 s) - the shape a real alert has when two rounds
+    // finish close together. The guard must not touch this playback.
+    alert.previewTone("crisp-a", null);
+    await alert.settled();
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    assert.equal(audio.log.starts.length, 4, "round two played both of its repeats too");
+    assert.equal(alert.state().failure, "");
+  } finally {
+    audio.restore();
+    browser.teardown();
+  }
+});
+
+test("a repeat is not cancelled by its own first playback ending", async () => {
+  const { module, browser, context } = await boot();
+  const audio = installFakeAudio(context, { startRunning: true });
+  try {
+    const alert = module.createAlert({ report: () => {} });
+    alert.configure({ ...module.DEFAULT_SETTINGS, repeat: 2, toneId: "crisp-a" });
+    alert.previewTone("crisp-a", null);
+    await alert.settled();
+    assert.equal(audio.log.starts.length, 1);
+
+    // A real browser fires `onended` when the source finishes, which clears the
+    // player's `sourceNode`. The repeat used to treat that as "the source was
+    // replaced" and skip itself, so a two-repeat alert was heard once. Fire it.
+    audio.log.sources?.[0]?.onended?.();
+    await new Promise((resolve) => setTimeout(resolve, 1800));
+    assert.equal(audio.log.starts.length, 2, "the second playback still happens");
+  } finally {
+    audio.restore();
+    browser.teardown();
+  }
+});
+
 test("stop cancels the repeats that have not played yet", async () => {
   const { module, browser, context } = await boot();
   const audio = installFakeAudio(context, { startRunning: true });
@@ -1392,7 +1441,7 @@ test("activation facts are reported to the diagnostics route", async () => {
  * preview is audible in Chrome.
  */
 function fakeAudioContext(options = {}) {
-  const log = { created: 0, resumes: 0, starts: [], stops: 0, decodes: 0, throwsOnStart: options.throwsOnStart === true };
+  const log = { created: 0, resumes: 0, starts: [], sources: [], stops: 0, decodes: 0, throwsOnStart: options.throwsOnStart === true };
   const makeParam = () => ({ value: 0 });
   const context = {
     state: options.startRunning === true ? "running" : "suspended",
@@ -1428,6 +1477,9 @@ function fakeAudioContext(options = {}) {
         start(when, offset, duration) {
           if (log.throwsOnStart) throw new Error("start refused");
           log.starts.push({ when, offset, duration });
+          // Kept so a test can fire `onended` the way a real browser does when a
+          // source finishes, which is what the repeat logic has to survive.
+          log.sources.push(node);
         },
         stop() {
           log.stops += 1;
