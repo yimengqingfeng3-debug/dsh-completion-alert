@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.8.4
+
+**Both halves of the tone list now behave the same when a row is picked.**
+
+Clicking a tone in the upper half selects it and auditions it, leaving the panel
+open. Clicking one the user added did that too, and then closed the panel - a
+leftover from when an added clip had to be "imported" before it could play. The
+two halves of one list behaving differently, for a reason the user cannot see, was
+the bug. Both rows now call the same pick handler.
+
 ## 1.8.3
 
 **The old "Custom tone" row is gone, and the clip it held becomes an ordinary
